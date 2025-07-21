@@ -1,21 +1,21 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Token {
     Number(f64),
-    Minus,
-    Plus,
+    Add,
+    Subtract,
     Multiply,
     Divide,
     LeftParent,
-    RightParent
-    // add more operators later
+    RightParent,
+    Eof, // add more operators later
 }
 
 pub struct Lexer {
     input: String,
     lexeme: String,
-    tokens: Vec<Token>
+    tokens: Vec<Token>,
 }
 
 impl Lexer {
@@ -24,7 +24,7 @@ impl Lexer {
         Self {
             input,
             lexeme: String::new(),
-            tokens: Vec::<Token>::new()
+            tokens: Vec::<Token>::new(),
         }
     }
 
@@ -34,34 +34,36 @@ impl Lexer {
             match c {
                 '0'..='9' | '.' => {
                     self.lexeme.push(c);
-                },
+                }
                 '+' => {
-                    self.handle_operator(Token::Plus)?;
-                },
+                    self.handle_operator(Token::Add)?;
+                }
                 '-' => {
-                    self.handle_operator(Token::Minus)?;
-                },
+                    self.handle_operator(Token::Subtract)?;
+                }
                 '*' => {
                     self.handle_operator(Token::Multiply)?;
-                },
+                }
                 '/' => {
                     self.handle_operator(Token::Divide)?;
-                },
+                }
                 '(' => {
                     self.handle_operator(Token::LeftParent)?;
-                },
+                }
                 ')' => {
                     self.handle_operator(Token::RightParent)?;
-                },
+                }
                 ' ' => {
                     self.flush_tokens()?;
-                },
-                _ => return Err(anyhow!("Unexpected character: {} at index {}", c, i))
+                }
+                _ => return Err(anyhow!("Unexpected character: {} at index {}", c, i)),
             }
         }
 
         if !self.lexeme.is_empty() {
-            let num = self.lexeme.parse::<f64>()
+            let num = self
+                .lexeme
+                .parse::<f64>()
                 .with_context(|| "Invalid number format")?;
             self.tokens.push(Token::Number(num));
         }
@@ -69,20 +71,22 @@ impl Lexer {
         Ok(std::mem::take(&mut self.tokens))
     }
 
-    fn handle_operator(&mut self, op: Token) -> Result<()>{
+    fn handle_operator(&mut self, op: Token) -> Result<()> {
         self.flush_tokens()?;
         self.tokens.push(op);
         Ok(())
     }
 
-    fn flush_tokens(&mut self) -> Result<()>{
+    fn flush_tokens(&mut self) -> Result<()> {
         if !self.lexeme.is_empty() {
-            let num = self.lexeme.parse::<f64>()
+            let num = self
+                .lexeme
+                .parse::<f64>()
                 .with_context(|| "Invalid number format")?;
             self.tokens.push(Token::Number(num));
             self.lexeme.clear();
         }
-        
+
         Ok(())
     }
 }
@@ -95,142 +99,153 @@ mod tests {
     fn test_basic_addition() {
         let mut lexer = Lexer::new("2 + 3".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
-        assert_eq!(tokens, vec![
-            Token::Number(2.0),
-            Token::Plus,
-            Token::Number(3.0)
-        ]);
+
+        assert_eq!(
+            tokens,
+            vec![Token::Number(2.0), Token::Add, Token::Number(3.0)]
+        );
     }
 
     #[test]
     fn test_multi_digit_numbers() {
-    let mut lexer = Lexer::new("25 + 137".to_string());
+        let mut lexer = Lexer::new("25 + 137".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
-        assert_eq!(tokens, vec![
-            Token::Number(25.0),
-            Token::Plus,
-            Token::Number(137.0)
-        ]);
+
+        assert_eq!(
+            tokens,
+            vec![Token::Number(25.0), Token::Add, Token::Number(137.0)]
+        );
     }
 
     #[test]
     fn test_decimal_numbers() {
-    let mut lexer = Lexer::new("3.14 * 2.5".to_string());
+        let mut lexer = Lexer::new("3.15 * 2.5".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
-        assert_eq!(tokens, vec![
-            Token::Number(3.14),
-            Token::Multiply,
-            Token::Number(2.5)
-        ]);
+
+        assert_eq!(
+            tokens,
+            vec![Token::Number(3.15), Token::Multiply, Token::Number(2.5)]
+        );
     }
 
     #[test]
     fn test_no_spaces() {
-    let mut lexer = Lexer::new("25+3*4".to_string());
+        let mut lexer = Lexer::new("25+3*4".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
-        assert_eq!(tokens, vec![
-            Token::Number(25.0),
-            Token::Plus,
-            Token::Number(3.0),
-            Token::Multiply,
-            Token::Number(4.0)
-        ]);
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Number(25.0),
+                Token::Add,
+                Token::Number(3.0),
+                Token::Multiply,
+                Token::Number(4.0)
+            ]
+        );
     }
 
     #[test]
     fn test_all_operators() {
-    let mut lexer = Lexer::new("1 + 2 - 3 * 4 / 5".to_string());
+        let mut lexer = Lexer::new("1 + 2 - 3 * 4 / 5".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
-        assert_eq!(tokens, vec![
-            Token::Number(1.0),
-            Token::Plus,
-            Token::Number(2.0),
-            Token::Minus,
-            Token::Number(3.0),
-            Token::Multiply,
-            Token::Number(4.0),
-            Token::Divide,
-            Token::Number(5.0)
-        ]);
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Number(1.0),
+                Token::Add,
+                Token::Number(2.0),
+                Token::Subtract,
+                Token::Number(3.0),
+                Token::Multiply,
+                Token::Number(4.0),
+                Token::Divide,
+                Token::Number(5.0)
+            ]
+        );
     }
 
     #[test]
     fn test_parentheses() {
-    let mut lexer = Lexer::new("(2 + 3) * 4".to_string());
+        let mut lexer = Lexer::new("(2 + 3) * 4".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
-        assert_eq!(tokens, vec![
-            Token::LeftParent,
-            Token::Number(2.0),
-            Token::Plus,
-            Token::Number(3.0),
-            Token::RightParent,
-            Token::Multiply,
-            Token::Number(4.0)
-        ]);
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::LeftParent,
+                Token::Number(2.0),
+                Token::Add,
+                Token::Number(3.0),
+                Token::RightParent,
+                Token::Multiply,
+                Token::Number(4.0)
+            ]
+        );
     }
 
     #[test]
     fn test_double_operators() {
-    let mut lexer = Lexer::new("2 + + 3".to_string());
+        let mut lexer = Lexer::new("2 + + 3".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
-        assert_eq!(tokens, vec![
-            Token::Number(2.0),
-            Token::Plus,
-            Token::Plus,
-            Token::Number(3.0)
-        ]);
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Number(2.0),
+                Token::Add,
+                Token::Add,
+                Token::Number(3.0)
+            ]
+        );
     }
 
     #[test]
     fn test_extra_spaces() {
-    let mut lexer = Lexer::new("  2   +   3  ".to_string());
+        let mut lexer = Lexer::new("  2   +   3  ".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
-        assert_eq!(tokens, vec![
-            Token::Number(2.0),
-            Token::Plus,
-            Token::Number(3.0)
-        ]);
+
+        assert_eq!(
+            tokens,
+            vec![Token::Number(2.0), Token::Add, Token::Number(3.0)]
+        );
     }
 
     #[test]
     fn test_single_number() {
-    let mut lexer = Lexer::new("42".to_string());
+        let mut lexer = Lexer::new("42".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
+
         assert_eq!(tokens, vec![Token::Number(42.0)]);
     }
 
     #[test]
     fn test_empty_string() {
-    let mut lexer = Lexer::new("".to_string());
+        let mut lexer = Lexer::new("".to_string());
         let tokens = lexer.tokenize().unwrap();
-        
+
         assert_eq!(tokens, vec![]);
-    }   
+    }
 
     #[test]
     fn test_unexpected_character() {
-    let mut lexer = Lexer::new("hello + 3".to_string());
+        let mut lexer = Lexer::new("hello + 3".to_string());
         let result = lexer.tokenize();
-        
+
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "Unexpected character: h at index 0");
-    }  
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Unexpected character: h at index 0"
+        );
+    }
 
     #[test]
     fn test_invalid_number() {
-    let mut lexer = Lexer::new("3.14.5".to_string());
+        let mut lexer = Lexer::new("3.14.5".to_string());
         let result = lexer.tokenize();
-        
+
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Invalid number format");
-    }        
+    }
 }
