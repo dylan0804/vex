@@ -29,7 +29,7 @@ impl Parser {
         if self.current >= self.tokens.len() {
             Token::Eof
         } else {
-            self.tokens[self.current]
+            self.tokens[self.current].clone()
         }
     }
 
