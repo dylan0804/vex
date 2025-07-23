@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
@@ -60,22 +60,27 @@ impl Lexer {
                 ')' => {
                     self.handle_operator(Token::RightParent)?;
                 }
-                ' ' => {
+                ' ' | '\n' => {
                     self.flush_tokens()?;
                     self.advance_position();
-                },
+                }
                 '=' => {
                     self.handle_operator(Token::Assign)?;
-                },
+                }
                 'a'..='z' | 'A'..='Z' | '_' => {
                     let word = self.read_word(&input);
                     if word == "let" {
-                        self.handle_operator(Token::Let)?;
+                        self.tokens.push(Token::Let);
                     } else {
-                        self.handle_operator(Token::Identifier(word))?;
+                        self.tokens.push(Token::Identifier(word));
                     }
-                },
-                _ => return Err(anyhow!(format!("Unexpected error at: {}, character: {}", self.position, c)))
+                }
+                _ => {
+                    return Err(anyhow!(format!(
+                        "Unexpected error at: {}, character: {}",
+                        self.position, c
+                    )));
+                }
             }
         }
 
@@ -117,7 +122,6 @@ impl Lexer {
             if ch.is_ascii_alphanumeric() || ch == '_' {
                 word.push(ch);
                 self.advance_position();
-                println!("position is {}", self.position);
             } else {
                 break;
             }
@@ -370,6 +374,8 @@ mod tests {
         let mut lexer = Lexer::new("((2 + 3) * (4 - 1))".to_string());
         let tokens = lexer.tokenize().unwrap();
 
+        let x = 1;
+
         assert_eq!(
             tokens,
             vec![
@@ -386,6 +392,21 @@ mod tests {
                 Token::Number(1.0),
                 Token::RightParent,
                 Token::RightParent
+            ]
+        );
+    }
+
+    #[test]
+    fn test_let_assignment_no_spaces() {
+        let mut lexer = Lexer::new("letx=42".to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("letx".to_string()),
+                Token::Assign,
+                Token::Number(42.0)
             ]
         );
     }
