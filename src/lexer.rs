@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
@@ -11,7 +11,10 @@ pub enum Token {
     RightParent,
     Let,
     Identifier(String),
+    String(String),
     Assign,
+    Print,
+    Comma,
     Eof, // add more operators later
 }
 
@@ -60,6 +63,9 @@ impl Lexer {
                 ')' => {
                     self.handle_operator(Token::RightParent)?;
                 }
+                ',' => {
+                    self.handle_operator(Token::Comma)?;
+                }
                 ' ' | '\n' => {
                     self.flush_tokens()?;
                     self.advance_position();
@@ -67,12 +73,21 @@ impl Lexer {
                 '=' => {
                     self.handle_operator(Token::Assign)?;
                 }
+                '"' => {
+                    self.advance_position();
+                    let str = self.read_content(&input)?;
+                    self.tokens.push(Token::String(str));
+                }
                 'a'..='z' | 'A'..='Z' | '_' => {
                     let word = self.read_word(&input);
-                    if word == "let" {
-                        self.tokens.push(Token::Let);
-                    } else {
-                        self.tokens.push(Token::Identifier(word));
+                    match word.as_str() {
+                        "let" => {
+                            self.tokens.push(Token::Let);
+                        }
+                        "print" => {
+                            self.tokens.push(Token::Print);
+                        }
+                        _ => self.tokens.push(Token::Identifier(word)),
                     }
                 }
                 _ => {
@@ -128,6 +143,22 @@ impl Lexer {
         }
 
         word
+    }
+
+    fn read_content(&mut self, input: &str) -> Result<String> {
+        let mut content = String::new();
+        while self.position < input.len() {
+            let ch = input.as_bytes()[self.position] as char;
+            if ch == '"' {
+                self.advance_position();
+                println!("position is at {}", self.position);
+                return Ok(content);
+            }
+            content.push(ch);
+            self.advance_position();
+        }
+
+        Err(anyhow!("Expected a closing \""))
     }
 
     fn advance_position(&mut self) {
@@ -407,6 +438,22 @@ mod tests {
                 Token::Identifier("letx".to_string()),
                 Token::Assign,
                 Token::Number(42.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_print_with_string() {
+        let mut lexer = Lexer::new("print(\"hello world\")".to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Print,
+                Token::LeftParent,
+                Token::String("hello world".to_string()),
+                Token::RightParent
             ]
         );
     }

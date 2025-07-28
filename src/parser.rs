@@ -1,11 +1,11 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use crate::lexer::Token;
 
 #[derive(Debug, PartialEq)]
 pub enum Statement {
     LetDeclaration { name: String, expr: Expr },
-    Expr(Expr),
+    Print { format_str: String, args: Vec<Expr> },
 }
 
 #[derive(Debug, PartialEq)]
@@ -57,22 +57,61 @@ impl Parser {
         let mut statements = Vec::new();
         while self.current < self.tokens.len() {
             let current_token = self.current_token();
-            if current_token == Token::Let {
-                self.advance();
-                let stmt = self.parse_variable_declaration()?;
-                statements.push(stmt);
-            } else {
-                let expr = self.parse_expression()?;
-                statements.push(Statement::Expr(expr));
+            match current_token {
+                Token::Let => {
+                    self.advance();
+                    let stmt = self.parse_variable_declaration()?;
+                    statements.push(stmt);
+                }
+                Token::Print => {
+                    self.advance();
+                    let current_token = self.current_token();
+                    if !matches!(current_token, Token::LeftParent) {
+                        return Err(anyhow!("Expected an opening ( after print statement"));
+                    }
+
+                    self.advance();
+                    let print_stmt = self.parse_format_str()?;
+
+                    // check if closing parentheses is there
+                    if !matches!(current_token, Token::RightParent) {
+                        return Err(anyhow!("Expected a closing ) in a print statement"));
+                    }
+
+                    statements.push(print_stmt);
+                }
+                _ => break,
             }
         }
         Ok(statements)
     }
 
+    fn parse_format_str(&mut self) -> Result<Statement> {
+        if let Token::String(content) = self.current_token() {
+            self.advance();
+
+            let mut args = Vec::new();
+
+            while self.current_token() == Token::Comma {
+                self.advance();
+                let expr = self.parse_expression()?;
+                args.push(expr);
+            }
+
+            Ok(Statement::Print {
+                format_str: content,
+                args,
+            })
+        } else {
+            Err(anyhow!("Invalid format after print statement"))
+        }
+    }
+
     fn parse_variable_declaration(&mut self) -> Result<Statement> {
         if let Token::Identifier(i) = self.current_token() {
             self.advance(); // move past the identifier
-            if self.current_token() == Token::Assign { // check if the next token is of type Assign
+            if self.current_token() == Token::Assign {
+                // check if the next token is of type Assign
                 self.advance();
                 let expr = self.parse_expression()?;
                 Ok(Statement::LetDeclaration {
@@ -125,11 +164,11 @@ impl Parser {
             Token::Number(n) => {
                 self.advance();
                 return Ok(Expr::Number(n));
-            },
+            }
             Token::Identifier(i) => {
                 self.advance();
-                return Ok(Expr::Variable(i))
-            },
+                return Ok(Expr::Variable(i));
+            }
             Token::LeftParent => {
                 self.advance();
                 let expr = self.parse_expression()?;
@@ -143,19 +182,22 @@ impl Parser {
             }
             _ => {}
         }
-        Err(anyhow!(format!("Expected number or '(', found {:?}", self.current_token())))
+        Err(anyhow!(format!(
+            "Expected number or '(', found {:?}",
+            self.current_token()
+        )))
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod parser_tests {
     use crate::lexer::Lexer;
 
     use super::*;
 
     #[test]
     fn test_parse_multi_statement() {
-        let mut lexer = Lexer::new("let x = 5\n2 + 3".to_string());
+        let mut lexer = Lexer::new("let x = 5\nprint(2 + 3)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -167,7 +209,7 @@ mod tests {
                     name: "x".to_string(),
                     expr: Expr::Number(5.0)
                 },
-                Statement::Expr(Expr::BinaryOp {
+                Statement::Print(Expr::BinaryOp {
                     left: Box::new(Expr::Number(2.0)),
                     op: Token::Add,
                     right: Box::new(Expr::Number(3.0))
@@ -200,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_let_with_complex_expression() {
-        let mut lexer = Lexer::new("let result = 5 * 3\n10 + 2".to_string());
+        let mut lexer = Lexer::new("let result = 5 * 3\nprint(10 + 2)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -216,7 +258,7 @@ mod tests {
                         right: Box::new(Expr::Number(3.0))
                     }
                 },
-                Statement::Expr(Expr::BinaryOp {
+                Statement::Print(Expr::BinaryOp {
                     left: Box::new(Expr::Number(10.0)),
                     op: Token::Add,
                     right: Box::new(Expr::Number(2.0))
@@ -227,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_three_statements() {
-        let mut lexer = Lexer::new("let a = 1\nlet b = 2\n7 + 3".to_string());
+        let mut lexer = Lexer::new("let a = 1\nlet b = 2\nprint(7 + 3)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -243,7 +285,7 @@ mod tests {
                     name: "b".to_string(),
                     expr: Expr::Number(2.0)
                 },
-                Statement::Expr(Expr::BinaryOp {
+                Statement::Print(Expr::BinaryOp {
                     left: Box::new(Expr::Number(7.0)),
                     op: Token::Add,
                     right: Box::new(Expr::Number(3.0))
@@ -261,18 +303,16 @@ mod tests {
 
         assert_eq!(
             parsed_stmt,
-            vec![
-                Statement::LetDeclaration {
-                    name: "value".to_string(),
-                    expr: Expr::Number(42.0)
-                }
-            ]
+            vec![Statement::LetDeclaration {
+                name: "value".to_string(),
+                expr: Expr::Number(42.0)
+            }]
         )
     }
 
     #[test]
     fn test_variable_in_expression() {
-        let mut lexer = Lexer::new("let x = 5\nx + 3".to_string());
+        let mut lexer = Lexer::new("let x = 5\nprint(x + 3)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -284,7 +324,7 @@ mod tests {
                     name: "x".to_string(),
                     expr: Expr::Number(5.0)
                 },
-                Statement::Expr(Expr::BinaryOp {
+                Statement::Print(Expr::BinaryOp {
                     left: Box::new(Expr::Variable("x".to_string())),
                     op: Token::Add,
                     right: Box::new(Expr::Number(3.0))
@@ -295,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_two_variables_expression() {
-        let mut lexer = Lexer::new("let a = 10\nlet b = 20\na * b".to_string());
+        let mut lexer = Lexer::new("let a = 10\nlet b = 20\nprint(a * b)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -311,7 +351,7 @@ mod tests {
                     name: "b".to_string(),
                     expr: Expr::Number(20.0)
                 },
-                Statement::Expr(Expr::BinaryOp {
+                Statement::Print(Expr::BinaryOp {
                     left: Box::new(Expr::Variable("a".to_string())),
                     op: Token::Multiply,
                     right: Box::new(Expr::Variable("b".to_string()))
@@ -355,62 +395,56 @@ mod tests {
 
         assert_eq!(
             parsed_stmt,
-            vec![
-                Statement::LetDeclaration {
-                    name: "result".to_string(),
-                    expr: Expr::BinaryOp {
-                        left: Box::new(Expr::BinaryOp {
-                            left: Box::new(Expr::Variable("x".to_string())),
-                            op: Token::Multiply,
-                            right: Box::new(Expr::Number(2.0))
-                        }),
-                        op: Token::Add,
-                        right: Box::new(Expr::BinaryOp {
-                            left: Box::new(Expr::Variable("y".to_string())),
-                            op: Token::Divide,
-                            right: Box::new(Expr::Number(3.0))
-                        })
-                    }
+            vec![Statement::LetDeclaration {
+                name: "result".to_string(),
+                expr: Expr::BinaryOp {
+                    left: Box::new(Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("x".to_string())),
+                        op: Token::Multiply,
+                        right: Box::new(Expr::Number(2.0))
+                    }),
+                    op: Token::Add,
+                    right: Box::new(Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("y".to_string())),
+                        op: Token::Divide,
+                        right: Box::new(Expr::Number(3.0))
+                    })
                 }
-            ]
+            }]
         )
     }
 
     #[test]
     fn test_variable_with_parentheses() {
-        let mut lexer = Lexer::new("(x + y) * z".to_string());
+        let mut lexer = Lexer::new("print((x + y) * z)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
 
         assert_eq!(
             parsed_stmt,
-            vec![
-                Statement::Expr(Expr::BinaryOp {
-                    left: Box::new(Expr::BinaryOp {
-                        left: Box::new(Expr::Variable("x".to_string())),
-                        op: Token::Add,
-                        right: Box::new(Expr::Variable("y".to_string()))
-                    }),
-                    op: Token::Multiply,
-                    right: Box::new(Expr::Variable("z".to_string()))
-                })
-            ]
+            vec![Statement::Print(Expr::BinaryOp {
+                left: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("x".to_string())),
+                    op: Token::Add,
+                    right: Box::new(Expr::Variable("y".to_string()))
+                }),
+                op: Token::Multiply,
+                right: Box::new(Expr::Variable("z".to_string()))
+            })]
         )
     }
 
     #[test]
     fn test_single_variable_expression() {
-        let mut lexer = Lexer::new("myVar".to_string());
+        let mut lexer = Lexer::new("print(myVar)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
 
         assert_eq!(
             parsed_stmt,
-            vec![
-                Statement::Expr(Expr::Variable("myVar".to_string()))
-            ]
+            vec![Statement::Print(Expr::Variable("myVar".to_string()))]
         )
     }
 
