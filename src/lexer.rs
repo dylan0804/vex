@@ -1,3 +1,5 @@
+use std::{collections::HashMap, hash::Hash};
+
 use anyhow::{anyhow, Context, Result};
 
 #[derive(Debug, PartialEq, Clone)]
@@ -9,12 +11,21 @@ pub enum Token {
     Divide,
     LeftParent,
     RightParent,
+    LeftBrace,
+    RightBrace,
     Let,
     Identifier(String),
     String(String),
     Assign,
     Print,
+    GreaterThan,
+    LesserThan,
+    GreaterAndEqualThan,
+    LesserAndEqualThan,
     Comma,
+    True,
+    False,
+    If,
     Eof, // add more operators later
 }
 
@@ -23,14 +34,18 @@ pub struct Lexer {
     input: String,
     lexeme: String,
     tokens: Vec<Token>,
+    reserved_keywords: HashMap<String, Token>,
 }
 
 impl Lexer {
     pub fn new(input: String) -> Self {
         let input = input.trim().to_string();
+        let reserved_keywords = get_reserved_keywords();
+
         Self {
             position: 0,
             input,
+            reserved_keywords,
             lexeme: String::new(),
             tokens: Vec::<Token>::new(),
         }
@@ -63,8 +78,38 @@ impl Lexer {
                 ')' => {
                     self.handle_operator(Token::RightParent)?;
                 }
+                '{' => {
+                    self.handle_operator(Token::LeftBrace)?;
+                }
+                '}' => {
+                    self.handle_operator(Token::RightBrace)?;
+                }
                 ',' => {
                     self.handle_operator(Token::Comma)?;
+                }
+                '<' => {
+                    if let Some(c) = self.peek(&input) {
+                        if c == '=' {
+                            self.advance_position();
+                            self.handle_operator(Token::LesserAndEqualThan)?;
+                        } else {
+                            self.handle_operator(Token::LesserThan)?;
+                        }
+                    } else {
+                        self.handle_operator(Token::LesserThan)?;
+                    }
+                }
+                '>' => {
+                    if let Some(c) = self.peek(&input) {
+                        if c == '=' {
+                            self.advance_position();
+                            self.handle_operator(Token::GreaterAndEqualThan)?;
+                        } else {
+                            self.handle_operator(Token::GreaterThan)?;
+                        }
+                    } else {
+                        self.handle_operator(Token::GreaterThan)?;
+                    }
                 }
                 ' ' | '\n' => {
                     self.flush_tokens()?;
@@ -80,14 +125,10 @@ impl Lexer {
                 }
                 'a'..='z' | 'A'..='Z' | '_' => {
                     let word = self.read_word(&input);
-                    match word.as_str() {
-                        "let" => {
-                            self.tokens.push(Token::Let);
-                        }
-                        "print" => {
-                            self.tokens.push(Token::Print);
-                        }
-                        _ => self.tokens.push(Token::Identifier(word)),
+                    if let Some(token) = self.reserved_keywords.get(&word) {
+                        self.tokens.push(token.clone());
+                    } else {
+                        self.tokens.push(Token::Identifier(word));
                     }
                 }
                 _ => {
@@ -151,7 +192,6 @@ impl Lexer {
             let ch = input.as_bytes()[self.position] as char;
             if ch == '"' {
                 self.advance_position();
-                println!("position is at {}", self.position);
                 return Ok(content);
             }
             content.push(ch);
@@ -164,6 +204,30 @@ impl Lexer {
     fn advance_position(&mut self) {
         self.position += 1
     }
+
+    fn peek(&self, input: &str) -> Option<char> {
+        let mut next = 1;
+        while self.position + next < input.len() {
+            if let Some(c) = input.chars().nth(self.position + next) {
+                if !c.is_whitespace() {
+                    return Some(c);
+                }
+            }
+            next += 1;
+        }
+
+        None
+    }
+}
+
+fn get_reserved_keywords() -> HashMap<String, Token> {
+    HashMap::from([
+        ("let".to_string(), Token::Let),
+        ("print".to_string(), Token::Print),
+        ("true".to_string(), Token::True),
+        ("false".to_string(), Token::False),
+        ("if".to_string(), Token::If),
+    ])
 }
 
 #[cfg(test)]
@@ -404,8 +468,6 @@ mod tests {
     fn test_complex_nested_parentheses() {
         let mut lexer = Lexer::new("((2 + 3) * (4 - 1))".to_string());
         let tokens = lexer.tokenize().unwrap();
-
-        let x = 1;
 
         assert_eq!(
             tokens,

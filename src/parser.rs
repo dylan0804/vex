@@ -8,10 +8,32 @@ pub enum Statement {
     Print { format_str: String, args: Vec<Expr> },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Number(f64),
+    Boolean(bool),
+}
+
+impl Value {
+    pub fn as_number(&self) -> Result<f64> {
+        match self {
+            Value::Number(n) => Ok(*n),
+            Value::Boolean(_) => Err(anyhow!("Expected number, got boolean")),
+        }
+    }
+
+    pub fn to_string(&self) -> String {
+        match self {
+            Value::Number(n) => n.to_string(),
+            Value::Boolean(b) => b.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Expr {
-    Number(f64),
     Variable(String),
+    Value(Value),
     BinaryOp {
         left: Box<Expr>,
         op: Token,
@@ -65,8 +87,7 @@ impl Parser {
                 }
                 Token::Print => {
                     self.advance();
-                    let current_token = self.current_token();
-                    if !matches!(current_token, Token::LeftParent) {
+                    if !matches!(self.current_token(), Token::LeftParent) {
                         return Err(anyhow!("Expected an opening ( after print statement"));
                     }
 
@@ -74,11 +95,26 @@ impl Parser {
                     let print_stmt = self.parse_format_str()?;
 
                     // check if closing parentheses is there
-                    if !matches!(current_token, Token::RightParent) {
+                    if !matches!(self.current_token(), Token::RightParent) {
                         return Err(anyhow!("Expected a closing ) in a print statement"));
                     }
 
+                    self.advance();
                     statements.push(print_stmt);
+                }
+                Token::If => {
+                    self.advance();
+                    let expr = self.parse_expression()?;
+
+                    if !matches!(self.current_token(), Token::LeftBrace) {
+                        return Err(anyhow!("Expected '{{' after if condition"));
+                    }
+                    self.advance();
+
+                    while !matches!(self.current_token(), Token::RightBrace) {
+                        let stmt = self.parse_statement()?;
+                        println!("statements inside if {:?}", stmt);
+                    }
                 }
                 _ => break,
             }
@@ -88,14 +124,23 @@ impl Parser {
 
     fn parse_format_str(&mut self) -> Result<Statement> {
         if let Token::String(content) = self.current_token() {
+            let args_count = validate_string(&content)?;
             self.advance();
 
             let mut args = Vec::new();
 
             while self.current_token() == Token::Comma {
                 self.advance();
-                let expr = self.parse_expression()?;
+                let expr = self.parse_comparison()?;
                 args.push(expr);
+            }
+
+            if args.len() != args_count {
+                return Err(anyhow!(
+                    "Incorrect arguments was passed. Found {}, expected {}",
+                    args.len(),
+                    args_count
+                ));
             }
 
             Ok(Statement::Print {
@@ -113,7 +158,7 @@ impl Parser {
             if self.current_token() == Token::Assign {
                 // check if the next token is of type Assign
                 self.advance();
-                let expr = self.parse_expression()?;
+                let expr = self.parse_comparison()?;
                 Ok(Statement::LetDeclaration {
                     name: i.to_string(),
                     expr,
@@ -126,8 +171,30 @@ impl Parser {
         }
     }
 
+    fn parse_comparison(&mut self) -> Result<Expr> {
+        let mut left = self.parse_expression()?;
+        while matches!(
+            self.current_token(),
+            Token::GreaterThan
+                | Token::LesserThan
+                | Token::GreaterAndEqualThan
+                | Token::LesserAndEqualThan
+        ) {
+            let current_token = self.current_token();
+            self.advance();
+            let right = self.parse_expression()?;
+            left = Expr::BinaryOp {
+                left: Box::new(left),
+                op: current_token,
+                right: Box::new(right),
+            };
+        }
+
+        Ok(left)
+    }
+
     // handles lowest precedence e.g (+,-)
-    pub fn parse_expression(&mut self) -> Result<Expr> {
+    fn parse_expression(&mut self) -> Result<Expr> {
         let mut left = self.parse_term()?;
         while matches!(self.current_token(), Token::Add | Token::Subtract) {
             let current_token = self.current_token();
@@ -163,11 +230,19 @@ impl Parser {
         match self.current_token() {
             Token::Number(n) => {
                 self.advance();
-                return Ok(Expr::Number(n));
+                return Ok(Expr::Value(Value::Number(n)));
             }
             Token::Identifier(i) => {
                 self.advance();
                 return Ok(Expr::Variable(i));
+            }
+            Token::True => {
+                self.advance();
+                return Ok(Expr::Value(Value::Boolean(true)));
+            }
+            Token::False => {
+                self.advance();
+                return Ok(Expr::Value(Value::Boolean(false)));
             }
             Token::LeftParent => {
                 self.advance();
@@ -183,10 +258,38 @@ impl Parser {
             _ => {}
         }
         Err(anyhow!(format!(
-            "Expected number or '(', found {:?}",
+            "Unexpected token '{:?}' found",
             self.current_token()
         )))
     }
+}
+
+fn validate_string(content: &str) -> Result<usize> {
+    let mut stack = Vec::new();
+    let mut args_count = 0;
+
+    for c in content.chars() {
+        match c {
+            '{' => {
+                stack.push(c);
+            }
+            '}' => {
+                if let Some(_) = stack.last() {
+                    stack.pop();
+                    args_count += 1;
+                } else {
+                    return Err(anyhow!("Invalid '}}' in format string"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if stack.len() != 0 {
+        return Err(anyhow!("Invalid '{{' in format string"));
+    }
+
+    Ok(args_count)
 }
 
 #[cfg(test)]
@@ -197,7 +300,7 @@ mod parser_tests {
 
     #[test]
     fn test_parse_multi_statement() {
-        let mut lexer = Lexer::new("let x = 5\nprint(2 + 3)".to_string());
+        let mut lexer = Lexer::new("let x = 5\nprint(\"Result: {}\", 2 + 3)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -209,11 +312,14 @@ mod parser_tests {
                     name: "x".to_string(),
                     expr: Expr::Number(5.0)
                 },
-                Statement::Print(Expr::BinaryOp {
-                    left: Box::new(Expr::Number(2.0)),
-                    op: Token::Add,
-                    right: Box::new(Expr::Number(3.0))
-                })
+                Statement::Print {
+                    format_str: "Result: {}".to_string(),
+                    args: vec![Expr::BinaryOp {
+                        left: Box::new(Expr::Number(2.0)),
+                        op: Token::Add,
+                        right: Box::new(Expr::Number(3.0))
+                    }]
+                }
             ]
         )
     }
@@ -242,7 +348,7 @@ mod parser_tests {
 
     #[test]
     fn test_let_with_complex_expression() {
-        let mut lexer = Lexer::new("let result = 5 * 3\nprint(10 + 2)".to_string());
+        let mut lexer = Lexer::new("let result = 5 * 3\nprint(\"Answer: {}\", 10 + 2)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -258,18 +364,21 @@ mod parser_tests {
                         right: Box::new(Expr::Number(3.0))
                     }
                 },
-                Statement::Print(Expr::BinaryOp {
-                    left: Box::new(Expr::Number(10.0)),
-                    op: Token::Add,
-                    right: Box::new(Expr::Number(2.0))
-                })
+                Statement::Print {
+                    format_str: "Answer: {}".to_string(),
+                    args: vec![Expr::BinaryOp {
+                        left: Box::new(Expr::Number(10.0)),
+                        op: Token::Add,
+                        right: Box::new(Expr::Number(2.0))
+                    }]
+                }
             ]
         )
     }
 
     #[test]
     fn test_three_statements() {
-        let mut lexer = Lexer::new("let a = 1\nlet b = 2\nprint(7 + 3)".to_string());
+        let mut lexer = Lexer::new("let a = 1\nlet b = 2\nprint(\"Sum: {}\", 7 + 3)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -285,11 +394,14 @@ mod parser_tests {
                     name: "b".to_string(),
                     expr: Expr::Number(2.0)
                 },
-                Statement::Print(Expr::BinaryOp {
-                    left: Box::new(Expr::Number(7.0)),
-                    op: Token::Add,
-                    right: Box::new(Expr::Number(3.0))
-                })
+                Statement::Print {
+                    format_str: "Sum: {}".to_string(),
+                    args: vec![Expr::BinaryOp {
+                        left: Box::new(Expr::Number(7.0)),
+                        op: Token::Add,
+                        right: Box::new(Expr::Number(3.0))
+                    }]
+                }
             ]
         )
     }
@@ -312,7 +424,7 @@ mod parser_tests {
 
     #[test]
     fn test_variable_in_expression() {
-        let mut lexer = Lexer::new("let x = 5\nprint(x + 3)".to_string());
+        let mut lexer = Lexer::new("let x = 5\nprint(\"x + 3 = {}\", x + 3)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -324,18 +436,22 @@ mod parser_tests {
                     name: "x".to_string(),
                     expr: Expr::Number(5.0)
                 },
-                Statement::Print(Expr::BinaryOp {
-                    left: Box::new(Expr::Variable("x".to_string())),
-                    op: Token::Add,
-                    right: Box::new(Expr::Number(3.0))
-                })
+                Statement::Print {
+                    format_str: "x + 3 = {}".to_string(),
+                    args: vec![Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("x".to_string())),
+                        op: Token::Add,
+                        right: Box::new(Expr::Number(3.0))
+                    }]
+                }
             ]
         )
     }
 
     #[test]
     fn test_two_variables_expression() {
-        let mut lexer = Lexer::new("let a = 10\nlet b = 20\nprint(a * b)".to_string());
+        let mut lexer =
+            Lexer::new("let a = 10\nlet b = 20\nprint(\"a * b = {}\", a * b)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
@@ -351,11 +467,14 @@ mod parser_tests {
                     name: "b".to_string(),
                     expr: Expr::Number(20.0)
                 },
-                Statement::Print(Expr::BinaryOp {
-                    left: Box::new(Expr::Variable("a".to_string())),
-                    op: Token::Multiply,
-                    right: Box::new(Expr::Variable("b".to_string()))
-                })
+                Statement::Print {
+                    format_str: "a * b = {}".to_string(),
+                    args: vec![Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("a".to_string())),
+                        op: Token::Multiply,
+                        right: Box::new(Expr::Variable("b".to_string()))
+                    }]
+                }
             ]
         )
     }
@@ -416,35 +535,41 @@ mod parser_tests {
 
     #[test]
     fn test_variable_with_parentheses() {
-        let mut lexer = Lexer::new("print((x + y) * z)".to_string());
+        let mut lexer = Lexer::new("print(\"Result: {}\", (x + y) * z)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
 
         assert_eq!(
             parsed_stmt,
-            vec![Statement::Print(Expr::BinaryOp {
-                left: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Variable("x".to_string())),
-                    op: Token::Add,
-                    right: Box::new(Expr::Variable("y".to_string()))
-                }),
-                op: Token::Multiply,
-                right: Box::new(Expr::Variable("z".to_string()))
-            })]
+            vec![Statement::Print {
+                format_str: "Result: {}".to_string(),
+                args: vec![Expr::BinaryOp {
+                    left: Box::new(Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("x".to_string())),
+                        op: Token::Add,
+                        right: Box::new(Expr::Variable("y".to_string()))
+                    }),
+                    op: Token::Multiply,
+                    right: Box::new(Expr::Variable("z".to_string()))
+                }]
+            }]
         )
     }
 
     #[test]
     fn test_single_variable_expression() {
-        let mut lexer = Lexer::new("print(myVar)".to_string());
+        let mut lexer = Lexer::new("print(\"Value: {}\", myVar)".to_string());
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_stmt = parser.parse_statement().unwrap();
 
         assert_eq!(
             parsed_stmt,
-            vec![Statement::Print(Expr::Variable("myVar".to_string()))]
+            vec![Statement::Print {
+                format_str: "Value: {}".to_string(),
+                args: vec![Expr::Variable("myVar".to_string())]
+            }]
         )
     }
 
