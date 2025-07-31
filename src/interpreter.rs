@@ -22,7 +22,7 @@ impl Interpreter {
         let mut results = Vec::new();
         for stmt in statements {
             match stmt {
-                Statement::LetDeclaration { name, expr } => {
+                Statement::Declaration { name, expr } => {
                     let value = self.evaluate(&expr)?;
                     self.variables.insert(name, value);
                 }
@@ -34,6 +34,12 @@ impl Interpreter {
                     }
                     results.push(formatted_str);
                 }
+                Statement::If {
+                    condition,
+                    then_block,
+                    else_ifs,
+                    else_block,
+                } => {}
             }
         }
         Ok(results)
@@ -66,20 +72,20 @@ impl Interpreter {
                             return Err(anyhow!("Division by zero"));
                         } else {
                             Ok(Value::Number(
-                                left_val.as_number()? + right_val.as_number()?,
+                                left_val.as_number()? / right_val.as_number()?,
                             ))
                         }
                     }
-                    Token::LesserThan => Ok(Value::Boolean(
+                    Token::LessThan => Ok(Value::Boolean(
                         left_val.as_number()? < right_val.as_number()?,
                     )),
                     Token::GreaterThan => Ok(Value::Boolean(
                         left_val.as_number()? > right_val.as_number()?,
                     )),
-                    Token::GreaterAndEqualThan => Ok(Value::Boolean(
+                    Token::GreaterThanOrEqual => Ok(Value::Boolean(
                         left_val.as_number()? >= right_val.as_number()?,
                     )),
-                    Token::LesserAndEqualThan => Ok(Value::Boolean(
+                    Token::LessThanOrEqual => Ok(Value::Boolean(
                         left_val.as_number()? <= right_val.as_number()?,
                     )),
                     _ => Err(anyhow!(format!("Unknown operator {:?}", op))),

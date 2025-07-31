@@ -19,13 +19,15 @@ pub enum Token {
     Assign,
     Print,
     GreaterThan,
-    LesserThan,
-    GreaterAndEqualThan,
-    LesserAndEqualThan,
+    LessThan,
+    GreaterThanOrEqual,
+    LessThanOrEqual,
     Comma,
     True,
     False,
     If,
+    ElseIf,
+    Else,
     Eof, // add more operators later
 }
 
@@ -91,19 +93,19 @@ impl Lexer {
                     if let Some(c) = self.peek(&input) {
                         if c == '=' {
                             self.advance_position();
-                            self.handle_operator(Token::LesserAndEqualThan)?;
+                            self.handle_operator(Token::LessThanOrEqual)?;
                         } else {
-                            self.handle_operator(Token::LesserThan)?;
+                            self.handle_operator(Token::LessThan)?;
                         }
                     } else {
-                        self.handle_operator(Token::LesserThan)?;
+                        self.handle_operator(Token::LessThan)?;
                     }
                 }
                 '>' => {
                     if let Some(c) = self.peek(&input) {
                         if c == '=' {
                             self.advance_position();
-                            self.handle_operator(Token::GreaterAndEqualThan)?;
+                            self.handle_operator(Token::GreaterThanOrEqual)?;
                         } else {
                             self.handle_operator(Token::GreaterThan)?;
                         }
@@ -126,7 +128,12 @@ impl Lexer {
                 'a'..='z' | 'A'..='Z' | '_' => {
                     let word = self.read_word(&input);
                     if let Some(token) = self.reserved_keywords.get(&word) {
-                        self.tokens.push(token.clone());
+                        if word == "if" && self.top() == Token::Else {
+                            self.tokens.pop();
+                            self.tokens.push(Token::ElseIf);
+                        } else {
+                            self.tokens.push(token.clone());
+                        }
                     } else {
                         self.tokens.push(Token::Identifier(word));
                     }
@@ -147,6 +154,8 @@ impl Lexer {
                 .with_context(|| "Invalid number format")?;
             self.tokens.push(Token::Number(num));
         }
+
+        self.tokens.push(Token::Eof);
 
         Ok(std::mem::take(&mut self.tokens))
     }
@@ -218,6 +227,10 @@ impl Lexer {
 
         None
     }
+
+    fn top(&self) -> Token {
+        self.tokens.last().unwrap_or(&Token::Eof).clone()
+    }
 }
 
 fn get_reserved_keywords() -> HashMap<String, Token> {
@@ -227,11 +240,13 @@ fn get_reserved_keywords() -> HashMap<String, Token> {
         ("true".to_string(), Token::True),
         ("false".to_string(), Token::False),
         ("if".to_string(), Token::If),
+        ("else if".to_string(), Token::ElseIf),
+        ("else".to_string(), Token::Else),
     ])
 }
 
 #[cfg(test)]
-mod tests {
+mod lexer_tests {
     use super::*;
 
     #[test]
@@ -517,6 +532,77 @@ mod tests {
                 Token::String("hello world".to_string()),
                 Token::RightParent
             ]
+        );
+    }
+
+    #[test]
+    fn test_else_if_combination() {
+        let mut lexer = Lexer::new("else if".to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, vec![Token::ElseIf]);
+    }
+
+    #[test]
+    fn test_else_if_with_whitespace() {
+        let mut lexer = Lexer::new("else   if".to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, vec![Token::ElseIf]);
+    }
+
+    #[test]
+    fn test_else_if_with_newline() {
+        let mut lexer = Lexer::new("else\nif".to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, vec![Token::ElseIf]);
+    }
+
+    #[test]
+    fn test_separate_else_and_if() {
+        let mut lexer = Lexer::new("} else { } if".to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::RightBrace,
+                Token::Else,
+                Token::LeftBrace,
+                Token::RightBrace,
+                Token::If
+            ]
+        );
+    }
+
+    #[test]
+    fn test_if_else_if_chain() {
+        let mut lexer = Lexer::new("if else if else if".to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(tokens, vec![Token::If, Token::ElseIf, Token::ElseIf]);
+    }
+
+    #[test]
+    fn test_standalone_else() {
+        let mut lexer = Lexer::new("} else {".to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![Token::RightBrace, Token::Else, Token::LeftBrace]
+        );
+    }
+
+    #[test]
+    fn test_standalone_if() {
+        let mut lexer = Lexer::new("if condition".to_string());
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![Token::If, Token::Identifier("condition".to_string())]
         );
     }
 }

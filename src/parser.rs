@@ -1,11 +1,23 @@
 use anyhow::{anyhow, Result};
 
-use crate::lexer::Token;
+use crate::{errors::ParserError, lexer::Token};
 
 #[derive(Debug, PartialEq)]
 pub enum Statement {
-    LetDeclaration { name: String, expr: Expr },
-    Print { format_str: String, args: Vec<Expr> },
+    Declaration {
+        name: String,
+        expr: Expr,
+    },
+    Print {
+        format_str: String,
+        args: Vec<Expr>,
+    },
+    If {
+        condition: Expr,
+        then_block: Vec<Statement>,
+        else_ifs: Vec<(Expr, Vec<Statement>)>,
+        else_block: Option<Vec<Statement>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,7 +42,7 @@ impl Value {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Expr {
     Variable(String),
     Value(Value),
@@ -75,7 +87,7 @@ impl Parser {
     // inside parse_term() need right side, call parse_factor()
     // ...
 
-    pub fn parse_statement(&mut self) -> Result<Vec<Statement>> {
+    pub fn parse_statement(&mut self) -> Result<Vec<Statement>, ParserError> {
         let mut statements = Vec::new();
         while self.current < self.tokens.len() {
             let current_token = self.current_token();
@@ -88,7 +100,7 @@ impl Parser {
                 Token::Print => {
                     self.advance();
                     if !matches!(self.current_token(), Token::LeftParent) {
-                        return Err(anyhow!("Expected an opening ( after print statement"));
+                        return Err(ParserError::ExpectedOpeningParentAfterPrint);
                     }
 
                     self.advance();
@@ -96,7 +108,7 @@ impl Parser {
 
                     // check if closing parentheses is there
                     if !matches!(self.current_token(), Token::RightParent) {
-                        return Err(anyhow!("Expected a closing ) in a print statement"));
+                        return Err(ParserError::ExpectedClosingParentInPrint);
                     }
 
                     self.advance();
@@ -104,27 +116,78 @@ impl Parser {
                 }
                 Token::If => {
                     self.advance();
-                    let expr = self.parse_expression()?;
 
-                    if !matches!(self.current_token(), Token::LeftBrace) {
-                        return Err(anyhow!("Expected '{{' after if condition"));
-                    }
-                    self.advance();
+                    // if block
+                    let expr = self.parse_comparison()?;
+                    let then_block = self.parse_block_with_braces()?;
 
-                    while !matches!(self.current_token(), Token::RightBrace) {
-                        let stmt = self.parse_statement()?;
-                        println!("statements inside if {:?}", stmt);
+                    // else if block
+                    let mut else_ifs = Vec::new();
+                    while matches!(self.current_token(), Token::ElseIf) {
+                        self.advance();
+                        let expr = self.parse_comparison()?;
+                        let stmts = self.parse_block_with_braces()?;
+                        else_ifs.push((expr, stmts));
                     }
+
+                    // else block
+                    let else_block = if matches!(self.current_token(), Token::Else) {
+                        self.advance();
+                        let stmts = self.parse_block_with_braces()?;
+                        Some(stmts)
+                    } else {
+                        None
+                    };
+
+                    let if_statement = Statement::If {
+                        condition: expr,
+                        then_block,
+                        else_ifs,
+                        else_block,
+                    };
+
+                    statements.push(if_statement);
                 }
                 _ => break,
             }
         }
+
         Ok(statements)
     }
 
-    fn parse_format_str(&mut self) -> Result<Statement> {
+    fn parse_block_with_braces(&mut self) -> Result<Vec<Statement>, ParserError> {
+        if !matches!(self.current_token(), Token::LeftBrace) {
+            return Err(ParserError::ExpectedOpeningBraceAfterIf);
+        }
+        self.advance();
+
+        let mut stmts = Vec::new();
+        self.parse_if_block(&mut stmts)?;
+        if !matches!(self.current_token(), Token::RightBrace) {
+            return Err(ParserError::ExpectedClosingBraceAfterIf);
+        }
+
+        self.advance();
+
+        Ok(stmts)
+    }
+
+    fn parse_if_block(&mut self, stmts: &mut Vec<Statement>) -> Result<(), ParserError> {
+        while !matches!(self.current_token(), Token::RightBrace) {
+            if !self.is_statement_token() {
+                return Err(ParserError::MissingClosingBrace);
+            }
+
+            let stmt = self.parse_statement()?;
+
+            stmts.extend(stmt);
+        }
+        Ok(())
+    }
+
+    fn parse_format_str(&mut self) -> Result<Statement, ParserError> {
         if let Token::String(content) = self.current_token() {
-            let args_count = validate_string(&content)?;
+            let args_count = validate_args_count(&content)?;
             self.advance();
 
             let mut args = Vec::new();
@@ -136,11 +199,10 @@ impl Parser {
             }
 
             if args.len() != args_count {
-                return Err(anyhow!(
-                    "Incorrect arguments was passed. Found {}, expected {}",
-                    args.len(),
-                    args_count
-                ));
+                return Err(ParserError::IncorrectArgumentCount {
+                    found: args_count,
+                    expected: args.len(),
+                });
             }
 
             Ok(Statement::Print {
@@ -148,37 +210,37 @@ impl Parser {
                 args,
             })
         } else {
-            Err(anyhow!("Invalid format after print statement"))
+            Err(ParserError::InvalidFormatString)
         }
     }
 
-    fn parse_variable_declaration(&mut self) -> Result<Statement> {
+    fn parse_variable_declaration(&mut self) -> Result<Statement, ParserError> {
         if let Token::Identifier(i) = self.current_token() {
             self.advance(); // move past the identifier
             if self.current_token() == Token::Assign {
                 // check if the next token is of type Assign
                 self.advance();
                 let expr = self.parse_comparison()?;
-                Ok(Statement::LetDeclaration {
+                Ok(Statement::Declaration {
                     name: i.to_string(),
                     expr,
                 })
             } else {
-                Err(anyhow!("Expected '=' after variable name"))
+                return Err(ParserError::ExpectedAssignmentAfterVariable);
             }
         } else {
-            Err(anyhow!("Expected indentifier after 'let'"))
+            return Err(ParserError::ExpectedIdentifierAfterLet);
         }
     }
 
-    fn parse_comparison(&mut self) -> Result<Expr> {
+    fn parse_comparison(&mut self) -> Result<Expr, ParserError> {
         let mut left = self.parse_expression()?;
         while matches!(
             self.current_token(),
             Token::GreaterThan
-                | Token::LesserThan
-                | Token::GreaterAndEqualThan
-                | Token::LesserAndEqualThan
+                | Token::LessThan
+                | Token::GreaterThanOrEqual
+                | Token::LessThanOrEqual
         ) {
             let current_token = self.current_token();
             self.advance();
@@ -194,7 +256,7 @@ impl Parser {
     }
 
     // handles lowest precedence e.g (+,-)
-    fn parse_expression(&mut self) -> Result<Expr> {
+    fn parse_expression(&mut self) -> Result<Expr, ParserError> {
         let mut left = self.parse_term()?;
         while matches!(self.current_token(), Token::Add | Token::Subtract) {
             let current_token = self.current_token();
@@ -210,7 +272,7 @@ impl Parser {
     }
 
     // handles higher precedence e.g (*,/)
-    fn parse_term(&mut self) -> Result<Expr> {
+    fn parse_term(&mut self) -> Result<Expr, ParserError> {
         let mut left = self.parse_factor()?;
         while matches!(self.current_token(), Token::Multiply | Token::Divide) {
             let current_token = self.current_token();
@@ -226,7 +288,7 @@ impl Parser {
     }
 
     // handles number and parentheses
-    fn parse_factor(&mut self) -> Result<Expr> {
+    fn parse_factor(&mut self) -> Result<Expr, ParserError> {
         match self.current_token() {
             Token::Number(n) => {
                 self.advance();
@@ -252,19 +314,19 @@ impl Parser {
                     self.advance();
                     return Ok(expr);
                 } else {
-                    return Err(anyhow!("Expected ')' after expression"));
+                    return Err(ParserError::ExpectedClosingParentAfterExpression);
                 }
             }
-            _ => {}
+            _ => Err(ParserError::UnexpectedToken(self.current_token())),
         }
-        Err(anyhow!(format!(
-            "Unexpected token '{:?}' found",
-            self.current_token()
-        )))
+    }
+
+    pub fn is_statement_token(&self) -> bool {
+        matches!(self.current_token(), Token::Let | Token::If | Token::Print)
     }
 }
 
-fn validate_string(content: &str) -> Result<usize> {
+fn validate_args_count(content: &str) -> Result<usize, ParserError> {
     let mut stack = Vec::new();
     let mut args_count = 0;
 
@@ -278,7 +340,7 @@ fn validate_string(content: &str) -> Result<usize> {
                     stack.pop();
                     args_count += 1;
                 } else {
-                    return Err(anyhow!("Invalid '}}' in format string"));
+                    return Err(ParserError::InvalidClosingBrace);
                 }
             }
             _ => {}
@@ -286,7 +348,7 @@ fn validate_string(content: &str) -> Result<usize> {
     }
 
     if stack.len() != 0 {
-        return Err(anyhow!("Invalid '{{' in format string"));
+        return Err(ParserError::InvalidOpeningBrace);
     }
 
     Ok(args_count)
@@ -308,16 +370,16 @@ mod parser_tests {
         assert_eq!(
             parsed_stmt,
             vec![
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "x".to_string(),
-                    expr: Expr::Number(5.0)
+                    expr: Expr::Value(Value::Number(5.0))
                 },
                 Statement::Print {
                     format_str: "Result: {}".to_string(),
                     args: vec![Expr::BinaryOp {
-                        left: Box::new(Expr::Number(2.0)),
+                        left: Box::new(Expr::Value(Value::Number(2.0))),
                         op: Token::Add,
-                        right: Box::new(Expr::Number(3.0))
+                        right: Box::new(Expr::Value(Value::Number(3.0)))
                     }]
                 }
             ]
@@ -334,13 +396,13 @@ mod parser_tests {
         assert_eq!(
             parsed_stmt,
             vec![
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "x".to_string(),
-                    expr: Expr::Number(10.0)
+                    expr: Expr::Value(Value::Number(10.0))
                 },
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "y".to_string(),
-                    expr: Expr::Number(20.0)
+                    expr: Expr::Value(Value::Number(20.0))
                 }
             ]
         )
@@ -356,20 +418,20 @@ mod parser_tests {
         assert_eq!(
             parsed_stmt,
             vec![
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "result".to_string(),
                     expr: Expr::BinaryOp {
-                        left: Box::new(Expr::Number(5.0)),
+                        left: Box::new(Expr::Value(Value::Number(5.0))),
                         op: Token::Multiply,
-                        right: Box::new(Expr::Number(3.0))
+                        right: Box::new(Expr::Value(Value::Number(3.0)))
                     }
                 },
                 Statement::Print {
                     format_str: "Answer: {}".to_string(),
                     args: vec![Expr::BinaryOp {
-                        left: Box::new(Expr::Number(10.0)),
+                        left: Box::new(Expr::Value(Value::Number(10.0))),
                         op: Token::Add,
-                        right: Box::new(Expr::Number(2.0))
+                        right: Box::new(Expr::Value(Value::Number(2.0)))
                     }]
                 }
             ]
@@ -386,20 +448,20 @@ mod parser_tests {
         assert_eq!(
             parsed_stmt,
             vec![
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "a".to_string(),
-                    expr: Expr::Number(1.0)
+                    expr: Expr::Value(Value::Number(1.0))
                 },
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "b".to_string(),
-                    expr: Expr::Number(2.0)
+                    expr: Expr::Value(Value::Number(2.0))
                 },
                 Statement::Print {
                     format_str: "Sum: {}".to_string(),
                     args: vec![Expr::BinaryOp {
-                        left: Box::new(Expr::Number(7.0)),
+                        left: Box::new(Expr::Value(Value::Number(7.0))),
                         op: Token::Add,
-                        right: Box::new(Expr::Number(3.0))
+                        right: Box::new(Expr::Value(Value::Number(3.0)))
                     }]
                 }
             ]
@@ -415,9 +477,9 @@ mod parser_tests {
 
         assert_eq!(
             parsed_stmt,
-            vec![Statement::LetDeclaration {
+            vec![Statement::Declaration {
                 name: "value".to_string(),
-                expr: Expr::Number(42.0)
+                expr: Expr::Value(Value::Number(42.0))
             }]
         )
     }
@@ -432,16 +494,16 @@ mod parser_tests {
         assert_eq!(
             parsed_stmt,
             vec![
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "x".to_string(),
-                    expr: Expr::Number(5.0)
+                    expr: Expr::Value(Value::Number(5.0))
                 },
                 Statement::Print {
                     format_str: "x + 3 = {}".to_string(),
                     args: vec![Expr::BinaryOp {
                         left: Box::new(Expr::Variable("x".to_string())),
                         op: Token::Add,
-                        right: Box::new(Expr::Number(3.0))
+                        right: Box::new(Expr::Value(Value::Number(3.0)))
                     }]
                 }
             ]
@@ -459,13 +521,13 @@ mod parser_tests {
         assert_eq!(
             parsed_stmt,
             vec![
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "a".to_string(),
-                    expr: Expr::Number(10.0)
+                    expr: Expr::Value(Value::Number(10.0))
                 },
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "b".to_string(),
-                    expr: Expr::Number(20.0)
+                    expr: Expr::Value(Value::Number(20.0))
                 },
                 Statement::Print {
                     format_str: "a * b = {}".to_string(),
@@ -489,16 +551,16 @@ mod parser_tests {
         assert_eq!(
             parsed_stmt,
             vec![
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "x".to_string(),
-                    expr: Expr::Number(5.0)
+                    expr: Expr::Value(Value::Number(5.0))
                 },
-                Statement::LetDeclaration {
+                Statement::Declaration {
                     name: "y".to_string(),
                     expr: Expr::BinaryOp {
                         left: Box::new(Expr::Variable("x".to_string())),
                         op: Token::Add,
-                        right: Box::new(Expr::Number(10.0))
+                        right: Box::new(Expr::Value(Value::Number(10.0)))
                     }
                 }
             ]
@@ -514,19 +576,19 @@ mod parser_tests {
 
         assert_eq!(
             parsed_stmt,
-            vec![Statement::LetDeclaration {
+            vec![Statement::Declaration {
                 name: "result".to_string(),
                 expr: Expr::BinaryOp {
                     left: Box::new(Expr::BinaryOp {
                         left: Box::new(Expr::Variable("x".to_string())),
                         op: Token::Multiply,
-                        right: Box::new(Expr::Number(2.0))
+                        right: Box::new(Expr::Value(Value::Number(2.0)))
                     }),
                     op: Token::Add,
                     right: Box::new(Expr::BinaryOp {
                         left: Box::new(Expr::Variable("y".to_string())),
                         op: Token::Divide,
-                        right: Box::new(Expr::Number(3.0))
+                        right: Box::new(Expr::Value(Value::Number(3.0)))
                     })
                 }
             }]
@@ -583,9 +645,9 @@ mod parser_tests {
         assert_eq!(
             parsed_expr,
             Expr::BinaryOp {
-                left: Box::new(Expr::Number(3.0,)),
+                left: Box::new(Expr::Value(Value::Number(3.0))),
                 op: Token::Add,
-                right: Box::new(Expr::Number(3.0,)),
+                right: Box::new(Expr::Value(Value::Number(3.0))),
             }
         );
     }
@@ -600,9 +662,9 @@ mod parser_tests {
         assert_eq!(
             parsed_expr,
             Expr::BinaryOp {
-                left: Box::new(Expr::Number(5.0)),
+                left: Box::new(Expr::Value(Value::Number(5.0))),
                 op: Token::Subtract,
-                right: Box::new(Expr::Number(2.0)),
+                right: Box::new(Expr::Value(Value::Number(2.0))),
             }
         );
     }
@@ -617,9 +679,9 @@ mod parser_tests {
         assert_eq!(
             parsed_expr,
             Expr::BinaryOp {
-                left: Box::new(Expr::Number(4.0)),
+                left: Box::new(Expr::Value(Value::Number(4.0))),
                 op: Token::Multiply,
-                right: Box::new(Expr::Number(6.0)),
+                right: Box::new(Expr::Value(Value::Number(6.0))),
             }
         );
     }
@@ -634,9 +696,9 @@ mod parser_tests {
         assert_eq!(
             parsed_expr,
             Expr::BinaryOp {
-                left: Box::new(Expr::Number(8.0)),
+                left: Box::new(Expr::Value(Value::Number(8.0))),
                 op: Token::Divide,
-                right: Box::new(Expr::Number(2.0)),
+                right: Box::new(Expr::Value(Value::Number(2.0))),
             }
         );
     }
@@ -651,12 +713,12 @@ mod parser_tests {
         assert_eq!(
             parsed_expr,
             Expr::BinaryOp {
-                left: Box::new(Expr::Number(2.0)),
+                left: Box::new(Expr::Value(Value::Number(2.0))),
                 op: Token::Add,
                 right: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Number(3.0)),
+                    left: Box::new(Expr::Value(Value::Number(3.0))),
                     op: Token::Multiply,
-                    right: Box::new(Expr::Number(4.0)),
+                    right: Box::new(Expr::Value(Value::Number(4.0))),
                 }),
             }
         );
@@ -673,12 +735,12 @@ mod parser_tests {
             parsed_expr,
             Expr::BinaryOp {
                 left: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Number(10.0)),
+                    left: Box::new(Expr::Value(Value::Number(10.0))),
                     op: Token::Subtract,
-                    right: Box::new(Expr::Number(5.0)),
+                    right: Box::new(Expr::Value(Value::Number(5.0))),
                 }),
                 op: Token::Subtract,
-                right: Box::new(Expr::Number(2.0)),
+                right: Box::new(Expr::Value(Value::Number(2.0))),
             }
         );
     }
@@ -694,12 +756,12 @@ mod parser_tests {
             parsed_expr,
             Expr::BinaryOp {
                 left: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Number(2.0)),
+                    left: Box::new(Expr::Value(Value::Number(2.0))),
                     op: Token::Add,
-                    right: Box::new(Expr::Number(3.0)),
+                    right: Box::new(Expr::Value(Value::Number(3.0))),
                 }),
                 op: Token::Multiply,
-                right: Box::new(Expr::Number(4.0)),
+                right: Box::new(Expr::Value(Value::Number(4.0))),
             }
         );
     }
@@ -715,12 +777,12 @@ mod parser_tests {
             parsed_expr,
             Expr::BinaryOp {
                 left: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Number(2.0)),
+                    left: Box::new(Expr::Value(Value::Number(2.0))),
                     op: Token::Add,
-                    right: Box::new(Expr::Number(3.0)),
+                    right: Box::new(Expr::Value(Value::Number(3.0))),
                 }),
                 op: Token::Multiply,
-                right: Box::new(Expr::Number(4.0)),
+                right: Box::new(Expr::Value(Value::Number(4.0))),
             }
         );
     }
@@ -732,7 +794,7 @@ mod parser_tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_expression().unwrap();
 
-        assert_eq!(parsed_expr, Expr::Number(42.0));
+        assert_eq!(parsed_expr, Expr::Value(Value::Number(42.0)));
     }
 
     #[test]
@@ -742,6 +804,220 @@ mod parser_tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_expression().unwrap();
 
-        assert_eq!(parsed_expr, Expr::Number(42.0));
+        assert_eq!(parsed_expr, Expr::Value(Value::Number(42.0)));
+    }
+
+    #[test]
+    fn test_simple_if_statement() {
+        let mut lexer = Lexer::new("if x > 5 { let y = 10 }".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::If {
+                condition: Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("x".to_string())),
+                    op: Token::GreaterThan,
+                    right: Box::new(Expr::Value(Value::Number(5.0)))
+                },
+                then_block: vec![Statement::Declaration {
+                    name: "y".to_string(),
+                    expr: Expr::Value(Value::Number(10.0))
+                }],
+                else_ifs: vec![],
+                else_block: None
+            }]
+        );
+    }
+
+    #[test]
+    fn test_if_else_statement() {
+        let mut lexer = Lexer::new("if x > 5 { let y = 10 } else { let y = 20 }".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::If {
+                condition: Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("x".to_string())),
+                    op: Token::GreaterThan,
+                    right: Box::new(Expr::Value(Value::Number(5.0)))
+                },
+                then_block: vec![Statement::Declaration {
+                    name: "y".to_string(),
+                    expr: Expr::Value(Value::Number(10.0))
+                }],
+                else_ifs: vec![],
+                else_block: Some(vec![Statement::Declaration {
+                    name: "y".to_string(),
+                    expr: Expr::Value(Value::Number(20.0))
+                }])
+            }]
+        );
+    }
+
+    #[test]
+    fn test_if_else_if_statement() {
+        let mut lexer =
+            Lexer::new("if x > 10 { let y = 1 } else if x > 5 { let y = 2 }".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::If {
+                condition: Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("x".to_string())),
+                    op: Token::GreaterThan,
+                    right: Box::new(Expr::Value(Value::Number(10.0)))
+                },
+                then_block: vec![Statement::Declaration {
+                    name: "y".to_string(),
+                    expr: Expr::Value(Value::Number(1.0))
+                }],
+                else_ifs: vec![(
+                    Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("x".to_string())),
+                        op: Token::GreaterThan,
+                        right: Box::new(Expr::Value(Value::Number(5.0)))
+                    },
+                    vec![Statement::Declaration {
+                        name: "y".to_string(),
+                        expr: Expr::Value(Value::Number(2.0))
+                    }]
+                )],
+                else_block: None
+            }]
+        );
+    }
+
+    #[test]
+    fn test_if_else_if_else_statement() {
+        let mut lexer = Lexer::new(
+            "if x > 10 { let y = 1 } else if x > 5 { let y = 2 } else { let y = 3 }".to_string(),
+        );
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::If {
+                condition: Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("x".to_string())),
+                    op: Token::GreaterThan,
+                    right: Box::new(Expr::Value(Value::Number(10.0)))
+                },
+                then_block: vec![Statement::Declaration {
+                    name: "y".to_string(),
+                    expr: Expr::Value(Value::Number(1.0))
+                }],
+                else_ifs: vec![(
+                    Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("x".to_string())),
+                        op: Token::GreaterThan,
+                        right: Box::new(Expr::Value(Value::Number(5.0)))
+                    },
+                    vec![Statement::Declaration {
+                        name: "y".to_string(),
+                        expr: Expr::Value(Value::Number(2.0))
+                    }]
+                )],
+                else_block: Some(vec![Statement::Declaration {
+                    name: "y".to_string(),
+                    expr: Expr::Value(Value::Number(3.0))
+                }])
+            }]
+        );
+    }
+
+    #[test]
+    fn test_multiple_else_if_statements() {
+        let mut lexer = Lexer::new("if x > 10 { let y = 1 } else if x > 8 { let y = 2 } else if x > 5 { let y = 3 } else { let y = 4 }".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::If {
+                condition: Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("x".to_string())),
+                    op: Token::GreaterThan,
+                    right: Box::new(Expr::Value(Value::Number(10.0)))
+                },
+                then_block: vec![Statement::Declaration {
+                    name: "y".to_string(),
+                    expr: Expr::Value(Value::Number(1.0))
+                }],
+                else_ifs: vec![
+                    (
+                        Expr::BinaryOp {
+                            left: Box::new(Expr::Variable("x".to_string())),
+                            op: Token::GreaterThan,
+                            right: Box::new(Expr::Value(Value::Number(8.0)))
+                        },
+                        vec![Statement::Declaration {
+                            name: "y".to_string(),
+                            expr: Expr::Value(Value::Number(2.0))
+                        }]
+                    ),
+                    (
+                        Expr::BinaryOp {
+                            left: Box::new(Expr::Variable("x".to_string())),
+                            op: Token::GreaterThan,
+                            right: Box::new(Expr::Value(Value::Number(5.0)))
+                        },
+                        vec![Statement::Declaration {
+                            name: "y".to_string(),
+                            expr: Expr::Value(Value::Number(3.0))
+                        }]
+                    )
+                ],
+                else_block: Some(vec![Statement::Declaration {
+                    name: "y".to_string(),
+                    expr: Expr::Value(Value::Number(4.0))
+                }])
+            }]
+        );
+    }
+
+    #[test]
+    fn test_nested_if_statements() {
+        let mut lexer = Lexer::new("if x > 5 { if y > 10 { let z = 1 } }".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::If {
+                condition: Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("x".to_string())),
+                    op: Token::GreaterThan,
+                    right: Box::new(Expr::Value(Value::Number(5.0)))
+                },
+                then_block: vec![Statement::If {
+                    condition: Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("y".to_string())),
+                        op: Token::GreaterThan,
+                        right: Box::new(Expr::Value(Value::Number(10.0)))
+                    },
+                    then_block: vec![Statement::Declaration {
+                        name: "z".to_string(),
+                        expr: Expr::Value(Value::Number(1.0))
+                    }],
+                    else_ifs: vec![],
+                    else_block: None
+                }],
+                else_ifs: vec![],
+                else_block: None
+            }]
+        );
     }
 }
