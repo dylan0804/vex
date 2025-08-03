@@ -8,14 +8,48 @@ use crate::{
 };
 
 pub struct Interpreter {
-    variables: HashMap<String, Value>,
+    scopes: Vec<HashMap<String, Value>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         Self {
-            variables: HashMap::new(),
+            scopes: vec![HashMap::new()],
         }
+    }
+
+    pub fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    pub fn pop_scope(&mut self) -> Option<HashMap<String, Value>> {
+        self.scopes.pop()
+    }
+
+    fn get_variable(&mut self, name: &str) -> Option<&Value> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(value) = scope.get(name) {
+                return Some(value);
+            }
+        }
+
+        None
+    }
+
+    pub fn set_variable(&mut self, name: String, value: Value) {
+        if let Some(curr_scope) = self.scopes.last_mut() {
+            curr_scope.insert(name, value);
+        }
+    }
+
+    pub fn with_scope<F, T>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        self.push_scope();
+        let result = f(self);
+        self.pop_scope();
+        result
     }
 
     pub fn calculate(&mut self, statements: Vec<Statement>) -> Result<Vec<String>> {
@@ -24,7 +58,7 @@ impl Interpreter {
             match stmt {
                 Statement::Declaration { name, expr } => {
                     let value = self.evaluate(&expr)?;
-                    self.variables.insert(name, value);
+                    self.set_variable(name, value);
                 }
                 Statement::Print { format_str, args } => {
                     let mut formatted_str = format_str.clone();
@@ -39,20 +73,47 @@ impl Interpreter {
                     then_block,
                     else_ifs,
                     else_block,
-                } => {}
+                } => {
+                    let result =
+                        self.execute_if_statement(condition, then_block, else_ifs, else_block)?;
+                    results.extend(result);
+                }
             }
         }
         Ok(results)
     }
 
-    pub fn evaluate(&self, expr: &Expr) -> Result<Value> {
+    fn execute_if_statement(
+        &mut self,
+        condition: Expr,
+        then_block: Vec<Statement>,
+        else_ifs: Vec<(Expr, Vec<Statement>)>,
+        else_block: Option<Vec<Statement>>,
+    ) -> Result<Vec<String>> {
+        if let Value::Boolean(true) = self.evaluate(&condition)? {
+            return self.with_scope(|interpreter| interpreter.calculate(then_block));
+        }
+
+        for (else_if_expr, else_if_stmt) in else_ifs {
+            if let Value::Boolean(true) = self.evaluate(&else_if_expr)? {
+                return self.with_scope(|interpreter| interpreter.calculate(else_if_stmt));
+            }
+        }
+
+        if let Some(else_block) = else_block {
+            return self.with_scope(|interpreter| interpreter.calculate(else_block));
+        }
+
+        Ok(Vec::new())
+    }
+
+    pub fn evaluate(&mut self, expr: &Expr) -> Result<Value> {
         match expr {
             Expr::Value(val) => Ok(val.clone()),
             Expr::Variable(i) => self
-                .variables
-                .get(i)
+                .get_variable(i)
                 .cloned()
-                .ok_or_else(|| anyhow!("Variable {} not found", i)),
+                .ok_or_else(|| anyhow!("Variable \"{}\" not found", i)),
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate(left)?;
                 let right_val = self.evaluate(right)?;
@@ -92,6 +153,145 @@ impl Interpreter {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod interpreter_tests {
+    use super::*;
+    use crate::{lexer::Lexer, parser::Parser};
+
+    fn parse_and_interpret(input: &str) -> Result<Vec<String>> {
+        let mut lexer = Lexer::new(input.to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let statements = parser.parse_statement().unwrap();
+        let mut interpreter = Interpreter::new();
+        interpreter.calculate(statements)
+    }
+
+    #[test]
+    fn test_simple_if_true() {
+        let result = parse_and_interpret("if true { print(\"inside if\") }").unwrap();
+        assert_eq!(result, vec!["inside if"]);
+    }
+
+    #[test]
+    fn test_simple_if_false() {
+        let result = parse_and_interpret("if false { print(\"inside if\") }").unwrap();
+        assert_eq!(result, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_if_else_true_condition() {
+        let result =
+            parse_and_interpret("if true { print(\"in if\") } else { print(\"in else\") }")
+                .unwrap();
+        assert_eq!(result, vec!["in if"]);
+    }
+
+    #[test]
+    fn test_if_else_false_condition() {
+        let result =
+            parse_and_interpret("if false { print(\"in if\") } else { print(\"in else\") }")
+                .unwrap();
+        assert_eq!(result, vec!["in else"]);
+    }
+
+    #[test]
+    fn test_if_else_if_chain() {
+        let result = parse_and_interpret(
+            "let x = 7\nif x > 10 { print(\"big\") } else if x > 5 { print(\"medium\") } else { print(\"small\") }"
+        ).unwrap();
+        assert_eq!(result, vec!["medium"]);
+    }
+
+    #[test]
+    fn test_multiple_else_if() {
+        let result = parse_and_interpret(
+            "let x = 3\nif x > 10 { print(\"huge\") } else if x > 7 { print(\"big\") } else if x > 5 { print(\"medium\") } else { print(\"small\") }"
+        ).unwrap();
+        assert_eq!(result, vec!["small"]);
+    }
+
+    #[test]
+    fn test_variable_scoping_inside_if() {
+        let result = parse_and_interpret(
+            "let x = 5\nif x > 3 { let y = 10\nprint(\"y is {}\", y) }\nprint(\"x is {}\", x)",
+        );
+
+        // This should work - y exists inside if block, x exists outside
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output, vec!["y is 10", "x is 5"]);
+    }
+
+    #[test]
+    fn test_variable_scoping_y_not_available_outside() {
+        let result = parse_and_interpret("if true { let y = 10 }\nprint(\"y is {}\", y)");
+
+        // This should fail - y doesn't exist outside the if block
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Variable \"y\" not found"));
+    }
+
+    #[test]
+    fn test_variable_shadowing_in_if() {
+        let result = parse_and_interpret(
+            "let x = 5\nif true { let x = 100\nprint(\"inner x: {}\", x) }\nprint(\"outer x: {}\", x)"
+        ).unwrap();
+
+        assert_eq!(result, vec!["inner x: 100", "outer x: 5"]);
+    }
+
+    #[test]
+    fn test_nested_if_statements() {
+        let result = parse_and_interpret(
+            "let x = 8\nif x > 5 { if x > 7 { print(\"very big\") } else { print(\"medium\") } }",
+        )
+        .unwrap();
+
+        assert_eq!(result, vec!["very big"]);
+    }
+
+    #[test]
+    fn test_nested_scoping() {
+        let result = parse_and_interpret(
+            "let x = 1\nif true { let x = 2\nif true { let x = 3\nprint(\"innermost: {}\", x) }\nprint(\"middle: {}\", x) }\nprint(\"outer: {}\", x)"
+        ).unwrap();
+
+        assert_eq!(result, vec!["innermost: 3", "middle: 2", "outer: 1"]);
+    }
+
+    #[test]
+    fn test_if_with_expressions() {
+        let result = parse_and_interpret(
+            "let x = 10\nlet y = 5\nif x + y > 12 { print(\"sum is big\") } else { print(\"sum is small\") }"
+        ).unwrap();
+
+        assert_eq!(result, vec!["sum is big"]);
+    }
+
+    #[test]
+    fn test_multiple_statements_in_if_block() {
+        let result = parse_and_interpret(
+            "if true { let a = 1\nlet b = 2\nprint(\"a: {}\", a)\nprint(\"b: {}\", b) }",
+        )
+        .unwrap();
+
+        assert_eq!(result, vec!["a: 1", "b: 2"]);
+    }
+
+    #[test]
+    fn test_global_variables_accessible_in_if() {
+        let result =
+            parse_and_interpret("let global = 42\nif true { print(\"global is {}\", global) }")
+                .unwrap();
+
+        assert_eq!(result, vec!["global is 42"]);
     }
 }
 
@@ -309,7 +509,7 @@ mod tests {
         assert!(res
             .unwrap_err()
             .to_string()
-            .contains("Variable x not found"));
+            .contains("Variable \"x\" not found"));
     }
 
     #[test]

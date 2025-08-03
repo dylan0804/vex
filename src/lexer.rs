@@ -155,8 +155,6 @@ impl Lexer {
             self.tokens.push(Token::Number(num));
         }
 
-        self.tokens.push(Token::Eof);
-
         Ok(std::mem::take(&mut self.tokens))
     }
 
