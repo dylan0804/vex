@@ -1,6 +1,12 @@
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 use anyhow::{anyhow, Context, Result};
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum PrintType {
+    Whisper,
+    Shout,
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
@@ -13,11 +19,11 @@ pub enum Token {
     RightParent,
     LeftBrace,
     RightBrace,
-    Let,
+    Suppose,
     Identifier(String),
     String(String),
     Assign,
-    Print,
+    Print(PrintType),
     GreaterThan,
     LessThan,
     GreaterThanOrEqual,
@@ -25,9 +31,11 @@ pub enum Token {
     Comma,
     True,
     False,
-    If,
-    ElseIf,
-    Else,
+    Maybe,
+    Perhaps,
+    Nah,
+    Equal,
+    Pipeline,
     Eof, // add more operators later
 }
 
@@ -40,7 +48,7 @@ pub struct Lexer {
 }
 
 impl Lexer {
-    pub fn new(input: String) -> Self {
+    pub fn new(input: &str) -> Self {
         let input = input.trim().to_string();
         let reserved_keywords = get_reserved_keywords();
 
@@ -89,37 +97,23 @@ impl Lexer {
                 ',' => {
                     self.handle_operator(Token::Comma)?;
                 }
-                '<' => {
+                '|' => {
                     if let Some(c) = self.peek(&input) {
-                        if c == '=' {
+                        if c == '>' {
                             self.advance_position();
-                            self.handle_operator(Token::LessThanOrEqual)?;
-                        } else {
-                            self.handle_operator(Token::LessThan)?;
+                            self.handle_operator(Token::Pipeline)?;
                         }
-                    } else {
-                        self.handle_operator(Token::LessThan)?;
                     }
                 }
+                '<' => self.check_ahead(&input, '=', Token::LessThanOrEqual, Token::LessThan)?,
                 '>' => {
-                    if let Some(c) = self.peek(&input) {
-                        if c == '=' {
-                            self.advance_position();
-                            self.handle_operator(Token::GreaterThanOrEqual)?;
-                        } else {
-                            self.handle_operator(Token::GreaterThan)?;
-                        }
-                    } else {
-                        self.handle_operator(Token::GreaterThan)?;
-                    }
+                    self.check_ahead(&input, '=', Token::GreaterThanOrEqual, Token::GreaterThan)?
                 }
                 ' ' | '\n' => {
                     self.flush_tokens()?;
                     self.advance_position();
                 }
-                '=' => {
-                    self.handle_operator(Token::Assign)?;
-                }
+                '=' => self.check_ahead(&input, '=', Token::Equal, Token::Assign)?,
                 '"' => {
                     self.advance_position();
                     let str = self.read_content(&input)?;
@@ -128,12 +122,7 @@ impl Lexer {
                 'a'..='z' | 'A'..='Z' | '_' => {
                     let word = self.read_word(&input);
                     if let Some(token) = self.reserved_keywords.get(&word) {
-                        if word == "if" && self.top() == Token::Else {
-                            self.tokens.pop();
-                            self.tokens.push(Token::ElseIf);
-                        } else {
-                            self.tokens.push(token.clone());
-                        }
+                        self.tokens.push(token.clone());
                     } else {
                         self.tokens.push(Token::Identifier(word));
                     }
@@ -156,6 +145,27 @@ impl Lexer {
         }
 
         Ok(std::mem::take(&mut self.tokens))
+    }
+
+    fn check_ahead(
+        &mut self,
+        input: &str,
+        expected: char,
+        expected_token: Token,
+        fallback_token: Token,
+    ) -> Result<()> {
+        if let Some(c) = self.peek(&input) {
+            if c == expected {
+                self.advance_position();
+                self.handle_operator(expected_token)?;
+            } else {
+                self.handle_operator(fallback_token)?;
+            }
+        } else {
+            self.handle_operator(fallback_token)?;
+        }
+
+        Ok(())
     }
 
     fn handle_operator(&mut self, op: Token) -> Result<()> {
@@ -225,21 +235,18 @@ impl Lexer {
 
         None
     }
-
-    fn top(&self) -> Token {
-        self.tokens.last().unwrap_or(&Token::Eof).clone()
-    }
 }
 
 fn get_reserved_keywords() -> HashMap<String, Token> {
     HashMap::from([
-        ("let".to_string(), Token::Let),
-        ("print".to_string(), Token::Print),
+        ("suppose".to_string(), Token::Suppose),
+        ("shout".to_string(), Token::Print(PrintType::Shout)),
+        ("whisper".to_string(), Token::Print(PrintType::Whisper)),
         ("true".to_string(), Token::True),
         ("false".to_string(), Token::False),
-        ("if".to_string(), Token::If),
-        ("else if".to_string(), Token::ElseIf),
-        ("else".to_string(), Token::Else),
+        ("maybe".to_string(), Token::Maybe),
+        ("perhaps".to_string(), Token::Perhaps),
+        ("nah".to_string(), Token::Nah),
     ])
 }
 
@@ -249,7 +256,7 @@ mod lexer_tests {
 
     #[test]
     fn test_basic_addition() {
-        let mut lexer = Lexer::new("2 + 3".to_string());
+        let mut lexer = Lexer::new("2 + 3");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -260,7 +267,7 @@ mod lexer_tests {
 
     #[test]
     fn test_multi_digit_numbers() {
-        let mut lexer = Lexer::new("25 + 137".to_string());
+        let mut lexer = Lexer::new("25 + 137");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -270,8 +277,26 @@ mod lexer_tests {
     }
 
     #[test]
+    fn test_equals_operator() {
+        let mut lexer = Lexer::new("maybe x == 5 {}");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Maybe,
+                Token::Identifier("x".to_string()),
+                Token::Equal,
+                Token::Number(5.0),
+                Token::LeftBrace,
+                Token::RightBrace
+            ]
+        )
+    }
+
+    #[test]
     fn test_decimal_numbers() {
-        let mut lexer = Lexer::new("3.15 * 2.5".to_string());
+        let mut lexer = Lexer::new("3.15 * 2.5");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -282,7 +307,7 @@ mod lexer_tests {
 
     #[test]
     fn test_no_spaces() {
-        let mut lexer = Lexer::new("25+3*4".to_string());
+        let mut lexer = Lexer::new("25+3*4");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -299,7 +324,7 @@ mod lexer_tests {
 
     #[test]
     fn test_all_operators() {
-        let mut lexer = Lexer::new("1 + 2 - 3 * 4 / 5".to_string());
+        let mut lexer = Lexer::new("1 + 2 - 3 * 4 / 5");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -320,7 +345,7 @@ mod lexer_tests {
 
     #[test]
     fn test_parentheses() {
-        let mut lexer = Lexer::new("(2 + 3) * 4".to_string());
+        let mut lexer = Lexer::new("(2 + 3) * 4");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -339,7 +364,7 @@ mod lexer_tests {
 
     #[test]
     fn test_double_operators() {
-        let mut lexer = Lexer::new("2 + + 3".to_string());
+        let mut lexer = Lexer::new("2 + + 3");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -355,7 +380,7 @@ mod lexer_tests {
 
     #[test]
     fn test_extra_spaces() {
-        let mut lexer = Lexer::new("  2   +   3  ".to_string());
+        let mut lexer = Lexer::new("  2   +   3  ");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -366,7 +391,7 @@ mod lexer_tests {
 
     #[test]
     fn test_single_number() {
-        let mut lexer = Lexer::new("42".to_string());
+        let mut lexer = Lexer::new("42");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(tokens, vec![Token::Number(42.0)]);
@@ -374,7 +399,7 @@ mod lexer_tests {
 
     #[test]
     fn test_empty_string() {
-        let mut lexer = Lexer::new("".to_string());
+        let mut lexer = Lexer::new("");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(tokens, vec![]);
@@ -382,7 +407,7 @@ mod lexer_tests {
 
     #[test]
     fn test_invalid_number() {
-        let mut lexer = Lexer::new("3.14.5".to_string());
+        let mut lexer = Lexer::new("3.14.5");
         let result = lexer.tokenize();
 
         assert!(result.is_err());
@@ -391,13 +416,13 @@ mod lexer_tests {
 
     #[test]
     fn test_expression_with_identifier() {
-        let mut lexer = Lexer::new("let x = 5".to_string());
+        let mut lexer = Lexer::new("suppose x = 5");
         let result = lexer.tokenize().unwrap();
 
         assert_eq!(
             result,
             vec![
-                Token::Let,
+                Token::Suppose,
                 Token::Identifier("x".to_string()),
                 Token::Assign,
                 Token::Number(5.0)
@@ -407,13 +432,13 @@ mod lexer_tests {
 
     #[test]
     fn test_let_assignment() {
-        let mut lexer = Lexer::new("let variable = 42.5".to_string());
+        let mut lexer = Lexer::new("suppose variable = 42.5");
         let result = lexer.tokenize().unwrap();
 
         assert_eq!(
             result,
             vec![
-                Token::Let,
+                Token::Suppose,
                 Token::Identifier("variable".to_string()),
                 Token::Assign,
                 Token::Number(42.5)
@@ -423,7 +448,7 @@ mod lexer_tests {
 
     #[test]
     fn test_expression_with_variables() {
-        let mut lexer = Lexer::new("x + y * 2".to_string());
+        let mut lexer = Lexer::new("x + y * 2");
         let result = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -440,7 +465,7 @@ mod lexer_tests {
 
     #[test]
     fn test_underscore_identifier() {
-        let mut lexer = Lexer::new("_test = 10".to_string());
+        let mut lexer = Lexer::new("_test = 10");
         let result = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -455,7 +480,7 @@ mod lexer_tests {
 
     #[test]
     fn test_mixed_case_identifier() {
-        let mut lexer = Lexer::new("myVar123 = 100".to_string());
+        let mut lexer = Lexer::new("myVar123 = 100");
         let result = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -470,7 +495,7 @@ mod lexer_tests {
 
     #[test]
     fn test_unexpected_character_error() {
-        let mut lexer = Lexer::new("2 @ 3".to_string());
+        let mut lexer = Lexer::new("2 @ 3");
         let result = lexer.tokenize();
 
         assert!(result.is_err());
@@ -479,7 +504,7 @@ mod lexer_tests {
 
     #[test]
     fn test_complex_nested_parentheses() {
-        let mut lexer = Lexer::new("((2 + 3) * (4 - 1))".to_string());
+        let mut lexer = Lexer::new("((2 + 3) * (4 - 1))");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -504,7 +529,7 @@ mod lexer_tests {
 
     #[test]
     fn test_let_assignment_no_spaces() {
-        let mut lexer = Lexer::new("letx=42".to_string());
+        let mut lexer = Lexer::new("letx=42");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
@@ -519,13 +544,13 @@ mod lexer_tests {
 
     #[test]
     fn test_print_with_string() {
-        let mut lexer = Lexer::new("print(\"hello world\")".to_string());
+        let mut lexer = Lexer::new("whisper(\"hello world\")");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
             tokens,
             vec![
-                Token::Print,
+                Token::Print(PrintType::Whisper),
                 Token::LeftParent,
                 Token::String("hello world".to_string()),
                 Token::RightParent
@@ -534,73 +559,73 @@ mod lexer_tests {
     }
 
     #[test]
-    fn test_else_if_combination() {
-        let mut lexer = Lexer::new("else if".to_string());
+    fn test_perhaps_combination() {
+        let mut lexer = Lexer::new("perhaps");
         let tokens = lexer.tokenize().unwrap();
 
-        assert_eq!(tokens, vec![Token::ElseIf]);
+        assert_eq!(tokens, vec![Token::Perhaps]);
     }
 
     #[test]
-    fn test_else_if_with_whitespace() {
-        let mut lexer = Lexer::new("else   if".to_string());
+    fn test_nah_keyword() {
+        let mut lexer = Lexer::new("nah");
         let tokens = lexer.tokenize().unwrap();
 
-        assert_eq!(tokens, vec![Token::ElseIf]);
+        assert_eq!(tokens, vec![Token::Nah]);
     }
 
     #[test]
-    fn test_else_if_with_newline() {
-        let mut lexer = Lexer::new("else\nif".to_string());
+    fn test_maybe_perhaps_nah_chain() {
+        let mut lexer = Lexer::new("maybe perhaps nah");
         let tokens = lexer.tokenize().unwrap();
 
-        assert_eq!(tokens, vec![Token::ElseIf]);
+        assert_eq!(tokens, vec![Token::Maybe, Token::Perhaps, Token::Nah]);
     }
 
     #[test]
-    fn test_separate_else_and_if() {
-        let mut lexer = Lexer::new("} else { } if".to_string());
+    fn test_separate_nah_and_maybe() {
+        let mut lexer = Lexer::new("} nah { } maybe");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
             tokens,
             vec![
                 Token::RightBrace,
-                Token::Else,
+                Token::Nah,
                 Token::LeftBrace,
                 Token::RightBrace,
-                Token::If
+                Token::Maybe
             ]
         );
     }
 
     #[test]
-    fn test_if_else_if_chain() {
-        let mut lexer = Lexer::new("if else if else if".to_string());
+    fn test_maybe_perhaps_chain() {
+        let mut lexer = Lexer::new("maybe perhaps perhaps");
         let tokens = lexer.tokenize().unwrap();
 
-        assert_eq!(tokens, vec![Token::If, Token::ElseIf, Token::ElseIf]);
+        assert_eq!(tokens, vec![Token::Maybe, Token::Perhaps, Token::Perhaps]);
     }
 
     #[test]
-    fn test_standalone_else() {
-        let mut lexer = Lexer::new("} else {".to_string());
+    fn test_standalone_nah() {
+        let mut lexer = Lexer::new("} nah {");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
             tokens,
-            vec![Token::RightBrace, Token::Else, Token::LeftBrace]
+            vec![Token::RightBrace, Token::Nah, Token::LeftBrace]
         );
     }
 
     #[test]
-    fn test_standalone_if() {
-        let mut lexer = Lexer::new("if condition".to_string());
+    fn test_standalone_maybe() {
+        let mut lexer = Lexer::new("maybe condition");
         let tokens = lexer.tokenize().unwrap();
 
         assert_eq!(
             tokens,
-            vec![Token::If, Token::Identifier("condition".to_string())]
+            vec![Token::Maybe, Token::Identifier("condition".to_string())]
         );
     }
 }

@@ -27,6 +27,7 @@ impl Interpreter {
     }
 
     fn get_variable(&mut self, name: &str) -> Option<&Value> {
+        // check the current scope first (top of the vec)
         for scope in self.scopes.iter().rev() {
             if let Some(value) = scope.get(name) {
                 return Some(value);
@@ -149,6 +150,9 @@ impl Interpreter {
                     Token::LessThanOrEqual => Ok(Value::Boolean(
                         left_val.as_number()? <= right_val.as_number()?,
                     )),
+                    Token::Equal => Ok(Value::Boolean(
+                        left_val.as_number()? == right_val.as_number()?,
+                    )),
                     _ => Err(anyhow!(format!("Unknown operator {:?}", op))),
                 }
             }
@@ -162,7 +166,7 @@ mod interpreter_tests {
     use crate::{lexer::Lexer, parser::Parser};
 
     fn parse_and_interpret(input: &str) -> Result<Vec<String>> {
-        let mut lexer = Lexer::new(input.to_string());
+        let mut lexer = Lexer::new(input);
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let statements = parser.parse_statement().unwrap();
@@ -172,20 +176,20 @@ mod interpreter_tests {
 
     #[test]
     fn test_simple_if_true() {
-        let result = parse_and_interpret("if true { print(\"inside if\") }").unwrap();
+        let result = parse_and_interpret("maybe true { shout(\"inside if\") }").unwrap();
         assert_eq!(result, vec!["inside if"]);
     }
 
     #[test]
     fn test_simple_if_false() {
-        let result = parse_and_interpret("if false { print(\"inside if\") }").unwrap();
+        let result = parse_and_interpret("maybe false { shout(\"inside if\") }").unwrap();
         assert_eq!(result, Vec::<String>::new());
     }
 
     #[test]
     fn test_if_else_true_condition() {
         let result =
-            parse_and_interpret("if true { print(\"in if\") } else { print(\"in else\") }")
+            parse_and_interpret("maybe true { whisper(\"in if\") } nah { whisper(\"in else\") }")
                 .unwrap();
         assert_eq!(result, vec!["in if"]);
     }
@@ -193,7 +197,7 @@ mod interpreter_tests {
     #[test]
     fn test_if_else_false_condition() {
         let result =
-            parse_and_interpret("if false { print(\"in if\") } else { print(\"in else\") }")
+            parse_and_interpret("maybe false { whisper(\"in if\") } nah { whisper(\"in else\") }")
                 .unwrap();
         assert_eq!(result, vec!["in else"]);
     }
@@ -201,7 +205,7 @@ mod interpreter_tests {
     #[test]
     fn test_if_else_if_chain() {
         let result = parse_and_interpret(
-            "let x = 7\nif x > 10 { print(\"big\") } else if x > 5 { print(\"medium\") } else { print(\"small\") }"
+            "let x = 7\nmaybe x > 10 { shout(\"big\") } perhaps x > 5 { shout(\"medium\") } nah { shout(\"small\") }"
         ).unwrap();
         assert_eq!(result, vec!["medium"]);
     }
@@ -220,7 +224,7 @@ mod interpreter_tests {
             "let x = 5\nif x > 3 { let y = 10\nprint(\"y is {}\", y) }\nprint(\"x is {}\", x)",
         );
 
-        // This should work - y exists inside if block, x exists outside
+        // should work - y exists inside if block, x exists outside
         assert!(result.is_ok());
         let output = result.unwrap();
         assert_eq!(output, vec!["y is 10", "x is 5"]);
@@ -230,7 +234,7 @@ mod interpreter_tests {
     fn test_variable_scoping_y_not_available_outside() {
         let result = parse_and_interpret("if true { let y = 10 }\nprint(\"y is {}\", y)");
 
-        // This should fail - y doesn't exist outside the if block
+        // should fail - y doesn't exist outside the if block
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -300,10 +304,10 @@ mod tests {
     use super::*;
     use crate::{lexer::Lexer, parser::Parser};
 
-    // Basic arithmetic tests
+    // basic arithmetic tests
     #[test]
     fn test_addition() {
-        let mut lexer = Lexer::new("print(\"{}\", 3 + 2)".to_string());
+        let mut lexer = Lexer::new("whisper(\"{}\", 3 + 2)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -315,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_operator_precedence() {
-        let mut lexer = Lexer::new("print(\"{}\", 3 + 2 * 4)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", 3 + 2 * 4)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -327,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_subtraction() {
-        let mut lexer = Lexer::new("print(\"{}\", 10 - 4)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", 10 - 4)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -339,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_multiplication() {
-        let mut lexer = Lexer::new("print(\"{}\", 4 * 5)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", 4 * 5)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -351,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_division() {
-        let mut lexer = Lexer::new("print(\"{}\", 15 / 3)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", 15 / 3)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -363,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_parentheses_precedence() {
-        let mut lexer = Lexer::new("print(\"{}\", (3 + 2) * 4)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", (3 + 2) * 4)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -375,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_complex_expression() {
-        let mut lexer = Lexer::new("print(\"{}\", 2 + 3 * 4 - 1)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", 2 + 3 * 4 - 1)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -387,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_left_associativity() {
-        let mut lexer = Lexer::new("print(\"{}\", 10 - 3 - 2)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", 10 - 3 - 2)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -399,7 +403,7 @@ mod tests {
 
     #[test]
     fn test_nested_parentheses() {
-        let mut lexer = Lexer::new("print(\"{}\", ((2 + 3) * 4) / 2)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", ((2 + 3) * 4) / 2)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -411,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_decimal_numbers() {
-        let mut lexer = Lexer::new("print(\"{}\", 3.5 + 2.25)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", 3.5 + 2.25)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -423,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_single_number() {
-        let mut lexer = Lexer::new("print(\"{}\", 42)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", 42)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -433,10 +437,10 @@ mod tests {
         assert_eq!(res, vec!["42".to_string()]);
     }
 
-    // Variable tests
+    // variable tests
     #[test]
     fn test_variable_usage() {
-        let mut lexer = Lexer::new("let x = 5\nprint(\"{}\", x + 3)".to_string());
+        let mut lexer = Lexer::new("let x = 5\nprint(\"{}\", x + 3)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -448,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_multiple_variables() {
-        let mut lexer = Lexer::new("let x = 10\nlet y = 5\nprint(\"{}\", x * y)".to_string());
+        let mut lexer = Lexer::new("let x = 10\nlet y = 5\nprint(\"{}\", x * y)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -460,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_variable_in_let_expression() {
-        let mut lexer = Lexer::new("let x = 5\nlet y = x + 10\nprint(\"{}\", y)".to_string());
+        let mut lexer = Lexer::new("let x = 5\nlet y = x + 10\nprint(\"{}\", y)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -472,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_variable_redeclaration() {
-        let mut lexer = Lexer::new("let x = 5\nlet x = 10\nprint(\"{}\", x)".to_string());
+        let mut lexer = Lexer::new("let x = 5\nlet x = 10\nprint(\"{}\", x)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -484,8 +488,7 @@ mod tests {
 
     #[test]
     fn test_complex_variable_expression() {
-        let mut lexer =
-            Lexer::new("let a = 2\nlet b = 3\nlet c = 4\nprint(\"{}\", a + b * c)".to_string());
+        let mut lexer = Lexer::new("let a = 2\nlet b = 3\nlet c = 4\nprint(\"{}\", a + b * c)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -495,10 +498,10 @@ mod tests {
         assert_eq!(res, vec!["14".to_string()]); // a(2) + b(3) * c(4) = 2 + 12 = 14
     }
 
-    // Error handling tests
+    // error handling tests
     #[test]
     fn test_undefined_variable_error() {
-        let mut lexer = Lexer::new("print(\"{}\", x + 5)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", x + 5)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -514,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_division_by_zero() {
-        let mut lexer = Lexer::new("print(\"{}\", 5 / 0)".to_string());
+        let mut lexer = Lexer::new("print(\"{}\", 5 / 0)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -525,12 +528,11 @@ mod tests {
         assert_eq!(res.unwrap_err().to_string(), "Division by zero");
     }
 
-    // Multiple statement tests
+    // multiple statement tests
     #[test]
     fn test_multiple_expressions() {
-        let mut lexer = Lexer::new(
-            "print(\"{}\", 5 + 3)\nprint(\"{}\", 2 * 4)\nprint(\"{}\", 10 - 1)".to_string(),
-        );
+        let mut lexer =
+            Lexer::new("print(\"{}\", 5 + 3)\nprint(\"{}\", 2 * 4)\nprint(\"{}\", 10 - 1)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -543,15 +545,14 @@ mod tests {
 
     #[test]
     fn test_mixed_statements() {
-        let mut lexer = Lexer::new(
-            "let x = 10\nprint(\"{}\", 20 + 5)\nlet y = x * 2\nprint(\"{}\", y)".to_string(),
-        );
+        let mut lexer =
+            Lexer::new("let x = 10\nprint(\"{}\", 20 + 5)\nlet y = x * 2\nprint(\"{}\", y)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
         let res = int.calculate(parsed_expr).unwrap();
 
-        assert_eq!(res, vec!["25".to_string(), "20".to_string()]); // Results from print statements only
+        assert_eq!(res, vec!["25".to_string(), "20".to_string()]); // results from print statements only
     }
 }
