@@ -4,7 +4,7 @@ use anyhow::{anyhow, Ok, Result};
 
 use crate::{
     lexer::Token,
-    parser::{Expr, Statement, Value},
+    parser::{Expr, Statement, Value, ValueType},
 };
 
 pub struct Interpreter {
@@ -43,6 +43,17 @@ impl Interpreter {
         }
     }
 
+    pub fn update_variable(&mut self, name: String, value: Value) -> Result<()> {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.contains_key(&name) {
+                scope.insert(name, value);
+                return Ok(());
+            }
+        }
+
+        Err(anyhow!("Variable \"{}\" not found", name))
+    }
+
     pub fn with_scope<F, T>(&mut self, f: F) -> T
     where
         F: FnOnce(&mut Self) -> T,
@@ -60,6 +71,10 @@ impl Interpreter {
                 Statement::Declaration { name, expr } => {
                     let value = self.evaluate(&expr)?;
                     self.set_variable(name, value);
+                }
+                Statement::Assignment { name, expr } => {
+                    let value = self.evaluate(&expr)?;
+                    self.update_variable(name, value)?;
                 }
                 Statement::Print { format_str, args } => {
                     let mut formatted_str = format_str.clone();
@@ -115,20 +130,75 @@ impl Interpreter {
                 .get_variable(i)
                 .cloned()
                 .ok_or_else(|| anyhow!("Variable \"{}\" not found", i)),
+            Expr::Array(exprs) => {
+                let mut res = Vec::<Value>::new();
+                for expr in exprs {
+                    let value = self.evaluate(&expr)?;
+                    let current_type = value.get_type();
+
+                    if let Some(last_value) = res.last() {
+                        if current_type != last_value.get_type() {
+                            return Err(anyhow!(
+                                "Array elements must be the same type. Expected {:?}, found {:?}",
+                                last_value.get_type(),
+                                current_type
+                            ));
+                        }
+                        res.push(value);
+                    } else {
+                        res.push(value);
+                    }
+                }
+
+                Ok(Value::Array(res))
+            }
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate(left)?;
                 let right_val = self.evaluate(right)?;
 
+                let left_type = left_val.get_type();
+                let right_type = right_val.get_type();
+
                 match op {
-                    Token::Add => Ok(Value::Number(
-                        left_val.as_number()? + right_val.as_number()?,
-                    )),
-                    Token::Subtract => Ok(Value::Number(
-                        left_val.as_number()? - right_val.as_number()?,
-                    )),
-                    Token::Multiply => Ok(Value::Number(
-                        left_val.as_number()? * right_val.as_number()?,
-                    )),
+                    Token::Add => match (left_type, right_type) {
+                        (ValueType::Number, ValueType::Number) => Ok(Value::Number(
+                            left_val.as_number()? + right_val.as_number()?,
+                        )),
+                        (ValueType::String, _) | (_, ValueType::String) => Ok(Value::String(
+                            format!("{}{}", left_val.to_string(), right_val.to_string()),
+                        )),
+                        _ => Err(anyhow!(
+                            "Cannot add {:?}: {:?} and {:?}: {:?}",
+                            left_type,
+                            left_val.to_string(),
+                            right_type,
+                            right_val.to_string()
+                        )),
+                    },
+                    Token::Subtract => match (left_type, right_type) {
+                        (ValueType::Number, ValueType::Number) => Ok(Value::Number(
+                            left_val.as_number()? - right_val.as_number()?,
+                        )),
+                        _ => Err(anyhow!(
+                            "Cannot subtract {:?}: {:?} and {:?}: {:?}",
+                            left_type,
+                            left_val.to_string(),
+                            right_type,
+                            right_val.to_string()
+                        )),
+                    },
+                    Token::Multiply => match (left_type, right_type) {
+                        (ValueType::Number, ValueType::Number) => Ok(Value::Number(
+                            left_val.as_number()? * right_val.as_number()?,
+                        )),
+                        _ => Err(anyhow!(
+                            "Cannot multiply {:?}: {:?} and {:?}: {:?}",
+                            left_type,
+                            left_val.to_string(),
+                            right_type,
+                            right_val.to_string()
+                        )),
+                    },
                     Token::Divide => {
                         if right_val.as_number()? == 0.0 {
                             return Err(anyhow!("Division by zero"));
@@ -138,21 +208,81 @@ impl Interpreter {
                             ))
                         }
                     }
-                    Token::LessThan => Ok(Value::Boolean(
-                        left_val.as_number()? < right_val.as_number()?,
-                    )),
-                    Token::GreaterThan => Ok(Value::Boolean(
-                        left_val.as_number()? > right_val.as_number()?,
-                    )),
-                    Token::GreaterThanOrEqual => Ok(Value::Boolean(
-                        left_val.as_number()? >= right_val.as_number()?,
-                    )),
-                    Token::LessThanOrEqual => Ok(Value::Boolean(
-                        left_val.as_number()? <= right_val.as_number()?,
-                    )),
-                    Token::Equal => Ok(Value::Boolean(
-                        left_val.as_number()? == right_val.as_number()?,
-                    )),
+                    Token::LessThan => match (left_type, right_type) {
+                        (ValueType::Number, ValueType::Number) => Ok(Value::Boolean(
+                            left_val.as_number()? < right_val.as_number()?,
+                        )),
+                        (ValueType::String, ValueType::String) => {
+                            Ok(Value::Boolean(left_val.to_string() < right_val.to_string()))
+                        }
+                        _ => Err(anyhow!(
+                            "Cannot compare {:?}: {:?} and {:?}: {:?}",
+                            left_type,
+                            left_val.to_string(),
+                            right_type,
+                            right_val.to_string()
+                        )),
+                    },
+                    Token::GreaterThan => match (left_type, right_type) {
+                        (ValueType::Number, ValueType::Number) => Ok(Value::Boolean(
+                            left_val.as_number()? > right_val.as_number()?,
+                        )),
+                        (ValueType::String, ValueType::String) => {
+                            Ok(Value::Boolean(left_val.to_string() > right_val.to_string()))
+                        }
+                        _ => Err(anyhow!(
+                            "Cannot compare {:?}: {:?} and {:?}: {:?}",
+                            left_type,
+                            left_val.to_string(),
+                            right_type,
+                            right_val.to_string()
+                        )),
+                    },
+                    Token::GreaterThanOrEqual => match (left_type, right_type) {
+                        (ValueType::Number, ValueType::Number) => Ok(Value::Boolean(
+                            left_val.as_number()? >= right_val.as_number()?,
+                        )),
+                        (ValueType::String, ValueType::String) => Ok(Value::Boolean(
+                            left_val.to_string() >= right_val.to_string(),
+                        )),
+                        _ => Err(anyhow!(
+                            "Cannot compare {:?}: {:?} and {:?}: {:?}",
+                            left_type,
+                            left_val.to_string(),
+                            right_type,
+                            right_val.to_string()
+                        )),
+                    },
+                    Token::LessThanOrEqual => match (left_type, right_type) {
+                        (ValueType::Number, ValueType::Number) => Ok(Value::Boolean(
+                            left_val.as_number()? <= right_val.as_number()?,
+                        )),
+                        (ValueType::String, ValueType::String) => Ok(Value::Boolean(
+                            left_val.to_string() <= right_val.to_string(),
+                        )),
+                        _ => Err(anyhow!(
+                            "Cannot compare {:?}: {:?} and {:?}: {:?}",
+                            left_type,
+                            left_val.to_string(),
+                            right_type,
+                            right_val.to_string()
+                        )),
+                    },
+                    Token::Equal => match (left_type, right_type) {
+                        (ValueType::Number, ValueType::Number) => Ok(Value::Boolean(
+                            left_val.as_number()? == right_val.as_number()?,
+                        )),
+                        (ValueType::String, ValueType::String) => Ok(Value::Boolean(
+                            left_val.to_string() == right_val.to_string(),
+                        )),
+                        (ValueType::Boolean, ValueType::Boolean) => {
+                            Ok(Value::Boolean(left_val == right_val))
+                        }
+                        (ValueType::Array, ValueType::Array) => {
+                            Ok(Value::Boolean(left_val == right_val))
+                        }
+                        _ => Ok(Value::Boolean(false)),
+                    },
                     _ => Err(anyhow!(format!("Unknown operator {:?}", op))),
                 }
             }
@@ -177,7 +307,7 @@ mod interpreter_tests {
     #[test]
     fn test_simple_if_true() {
         let result = parse_and_interpret("maybe true { shout(\"inside if\") }").unwrap();
-        assert_eq!(result, vec!["inside if"]);
+        assert_eq!(result, vec!["inside if\n"]);
     }
 
     #[test]
@@ -205,34 +335,34 @@ mod interpreter_tests {
     #[test]
     fn test_if_else_if_chain() {
         let result = parse_and_interpret(
-            "let x = 7\nmaybe x > 10 { shout(\"big\") } perhaps x > 5 { shout(\"medium\") } nah { shout(\"small\") }"
+            "suppose x = 7\nmaybe x > 10 { shout(\"big\") } perhaps x > 5 { shout(\"medium\") } nah { shout(\"small\") }"
         ).unwrap();
-        assert_eq!(result, vec!["medium"]);
+        assert_eq!(result, vec!["medium\n"]);
     }
 
     #[test]
     fn test_multiple_else_if() {
         let result = parse_and_interpret(
-            "let x = 3\nif x > 10 { print(\"huge\") } else if x > 7 { print(\"big\") } else if x > 5 { print(\"medium\") } else { print(\"small\") }"
+            "suppose x = 3\nmaybe x > 10 { shout(\"huge\") } perhaps x > 7 { shout(\"big\") } perhaps x > 5 { shout(\"medium\") } nah { shout(\"small\") }"
         ).unwrap();
-        assert_eq!(result, vec!["small"]);
+        assert_eq!(result, vec!["small\n"]);
     }
 
     #[test]
     fn test_variable_scoping_inside_if() {
         let result = parse_and_interpret(
-            "let x = 5\nif x > 3 { let y = 10\nprint(\"y is {}\", y) }\nprint(\"x is {}\", x)",
+            "suppose x = 5\nmaybe x > 3 { suppose y = 10\nwhisper(\"y is {}\", y) }\nshout(\"x is {}\", x)",
         );
 
         // should work - y exists inside if block, x exists outside
         assert!(result.is_ok());
         let output = result.unwrap();
-        assert_eq!(output, vec!["y is 10", "x is 5"]);
+        assert_eq!(output, vec!["y is 10", "x is 5\n"]);
     }
 
     #[test]
     fn test_variable_scoping_y_not_available_outside() {
-        let result = parse_and_interpret("if true { let y = 10 }\nprint(\"y is {}\", y)");
+        let result = parse_and_interpret("maybe true { suppose y = 10 }\nwhisper(\"y is {}\", y)");
 
         // should fail - y doesn't exist outside the if block
         assert!(result.is_err());
@@ -245,35 +375,35 @@ mod interpreter_tests {
     #[test]
     fn test_variable_shadowing_in_if() {
         let result = parse_and_interpret(
-            "let x = 5\nif true { let x = 100\nprint(\"inner x: {}\", x) }\nprint(\"outer x: {}\", x)"
+            "suppose x = 5\nmaybe true { suppose x = 100\nshout(\"inner x: {}\", x) }\nwhisper(\"outer x: {}\", x)"
         ).unwrap();
 
-        assert_eq!(result, vec!["inner x: 100", "outer x: 5"]);
+        assert_eq!(result, vec!["inner x: 100\n", "outer x: 5"]);
     }
 
     #[test]
     fn test_nested_if_statements() {
         let result = parse_and_interpret(
-            "let x = 8\nif x > 5 { if x > 7 { print(\"very big\") } else { print(\"medium\") } }",
+            "suppose x = 8\nmaybe x > 5 { maybe x > 7 { shout(\"very big\") } nah { shout(\"medium\") } }",
         )
         .unwrap();
 
-        assert_eq!(result, vec!["very big"]);
+        assert_eq!(result, vec!["very big\n"]);
     }
 
     #[test]
     fn test_nested_scoping() {
         let result = parse_and_interpret(
-            "let x = 1\nif true { let x = 2\nif true { let x = 3\nprint(\"innermost: {}\", x) }\nprint(\"middle: {}\", x) }\nprint(\"outer: {}\", x)"
+            "suppose x = 1\nmaybe true { suppose x = 2\nmaybe true { suppose x = 3\nwhisper(\"innermost: {}\", x) }\nshout(\"middle: {}\", x) }\nshout(\"outer: {}\", x)"
         ).unwrap();
 
-        assert_eq!(result, vec!["innermost: 3", "middle: 2", "outer: 1"]);
+        assert_eq!(result, vec!["innermost: 3", "middle: 2\n", "outer: 1\n"]);
     }
 
     #[test]
     fn test_if_with_expressions() {
         let result = parse_and_interpret(
-            "let x = 10\nlet y = 5\nif x + y > 12 { print(\"sum is big\") } else { print(\"sum is small\") }"
+            "suppose x = 10\nsuppose y = 5\nmaybe x + y > 12 { whisper(\"sum is big\") } nah { whisper(\"sum is small\") }"
         ).unwrap();
 
         assert_eq!(result, vec!["sum is big"]);
@@ -282,20 +412,21 @@ mod interpreter_tests {
     #[test]
     fn test_multiple_statements_in_if_block() {
         let result = parse_and_interpret(
-            "if true { let a = 1\nlet b = 2\nprint(\"a: {}\", a)\nprint(\"b: {}\", b) }",
+            "maybe true { suppose a = 1\nsuppose b = 2\nshout(\"a: {}\", a)\nwhisper(\"b: {}\", b) }",
         )
         .unwrap();
 
-        assert_eq!(result, vec!["a: 1", "b: 2"]);
+        assert_eq!(result, vec!["a: 1\n", "b: 2"]);
     }
 
     #[test]
     fn test_global_variables_accessible_in_if() {
-        let result =
-            parse_and_interpret("let global = 42\nif true { print(\"global is {}\", global) }")
-                .unwrap();
+        let result = parse_and_interpret(
+            "suppose global = 42\nmaybe true { shout(\"global is {}\", global) }",
+        )
+        .unwrap();
 
-        assert_eq!(result, vec!["global is 42"]);
+        assert_eq!(result, vec!["global is 42\n"]);
     }
 }
 
@@ -319,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_operator_precedence() {
-        let mut lexer = Lexer::new("print(\"{}\", 3 + 2 * 4)");
+        let mut lexer = Lexer::new("whisper(\"{}\", 3 + 2 * 4)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -331,7 +462,7 @@ mod tests {
 
     #[test]
     fn test_subtraction() {
-        let mut lexer = Lexer::new("print(\"{}\", 10 - 4)");
+        let mut lexer = Lexer::new("whisper(\"{}\", 10 - 4)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -343,19 +474,19 @@ mod tests {
 
     #[test]
     fn test_multiplication() {
-        let mut lexer = Lexer::new("print(\"{}\", 4 * 5)");
+        let mut lexer = Lexer::new("shout(\"{}\", 4 * 5)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
         let res = int.calculate(parsed_expr).unwrap();
 
-        assert_eq!(res, vec!["20".to_string()]);
+        assert_eq!(res, vec!["20\n".to_string()]);
     }
 
     #[test]
     fn test_division() {
-        let mut lexer = Lexer::new("print(\"{}\", 15 / 3)");
+        let mut lexer = Lexer::new("whisper(\"{}\", 15 / 3)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -367,7 +498,7 @@ mod tests {
 
     #[test]
     fn test_parentheses_precedence() {
-        let mut lexer = Lexer::new("print(\"{}\", (3 + 2) * 4)");
+        let mut lexer = Lexer::new("whisper(\"{}\", (3 + 2) * 4)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -379,31 +510,31 @@ mod tests {
 
     #[test]
     fn test_complex_expression() {
-        let mut lexer = Lexer::new("print(\"{}\", 2 + 3 * 4 - 1)");
+        let mut lexer = Lexer::new("shout(\"{}\", 2 + 3 * 4 - 1)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
         let res = int.calculate(parsed_expr).unwrap();
 
-        assert_eq!(res, vec!["13".to_string()]); // 2 + (3 * 4) - 1 = 13
+        assert_eq!(res, vec!["13\n".to_string()]); // 2 + (3 * 4) - 1 = 13
     }
 
     #[test]
     fn test_left_associativity() {
-        let mut lexer = Lexer::new("print(\"{}\", 10 - 3 - 2)");
+        let mut lexer = Lexer::new("shout(\"{}\", 10 - 3 - 2)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
         let res = int.calculate(parsed_expr).unwrap();
 
-        assert_eq!(res, vec!["5".to_string()]); // (10 - 3) - 2 = 5
+        assert_eq!(res, vec!["5\n".to_string()]); // (10 - 3) - 2 = 5
     }
 
     #[test]
     fn test_nested_parentheses() {
-        let mut lexer = Lexer::new("print(\"{}\", ((2 + 3) * 4) / 2)");
+        let mut lexer = Lexer::new("whisper(\"{}\", ((2 + 3) * 4) / 2)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -415,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_decimal_numbers() {
-        let mut lexer = Lexer::new("print(\"{}\", 3.5 + 2.25)");
+        let mut lexer = Lexer::new("whisper(\"{}\", 3.5 + 2.25)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -427,20 +558,20 @@ mod tests {
 
     #[test]
     fn test_single_number() {
-        let mut lexer = Lexer::new("print(\"{}\", 42)");
+        let mut lexer = Lexer::new("shout(\"{}\", 42)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
         let res = int.calculate(parsed_expr).unwrap();
 
-        assert_eq!(res, vec!["42".to_string()]);
+        assert_eq!(res, vec!["42\n".to_string()]);
     }
 
     // variable tests
     #[test]
     fn test_variable_usage() {
-        let mut lexer = Lexer::new("let x = 5\nprint(\"{}\", x + 3)");
+        let mut lexer = Lexer::new("suppose x = 5\nwhisper(\"{}\", x + 3)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -452,7 +583,7 @@ mod tests {
 
     #[test]
     fn test_multiple_variables() {
-        let mut lexer = Lexer::new("let x = 10\nlet y = 5\nprint(\"{}\", x * y)");
+        let mut lexer = Lexer::new("suppose x = 10\nsuppose y = 5\nwhisper(\"{}\", x * y)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -464,44 +595,45 @@ mod tests {
 
     #[test]
     fn test_variable_in_let_expression() {
-        let mut lexer = Lexer::new("let x = 5\nlet y = x + 10\nprint(\"{}\", y)");
+        let mut lexer = Lexer::new("suppose x = 5\nsuppose y = x + 10\nshout(\"{}\", y)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
         let res = int.calculate(parsed_expr).unwrap();
 
-        assert_eq!(res, vec!["15".to_string()]); // y = x(5) + 10 = 15
+        assert_eq!(res, vec!["15\n".to_string()]); // y = x(5) + 10 = 15
     }
 
     #[test]
     fn test_variable_redeclaration() {
-        let mut lexer = Lexer::new("let x = 5\nlet x = 10\nprint(\"{}\", x)");
+        let mut lexer = Lexer::new("suppose x = 5\nsuppose x = 10\nshout(\"{}\", x)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
         let res = int.calculate(parsed_expr).unwrap();
 
-        assert_eq!(res, vec!["10".to_string()]); // x gets redeclared to 10
+        assert_eq!(res, vec!["10\n".to_string()]); // x gets redeclared to 10
     }
 
     #[test]
     fn test_complex_variable_expression() {
-        let mut lexer = Lexer::new("let a = 2\nlet b = 3\nlet c = 4\nprint(\"{}\", a + b * c)");
+        let mut lexer =
+            Lexer::new("suppose a = 2\nsuppose b = 3\nsuppose c = 4\nshout(\"{}\", a + b * c)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
         let res = int.calculate(parsed_expr).unwrap();
 
-        assert_eq!(res, vec!["14".to_string()]); // a(2) + b(3) * c(4) = 2 + 12 = 14
+        assert_eq!(res, vec!["14\n".to_string()]); // a(2) + b(3) * c(4) = 2 + 12 = 14
     }
 
     // error handling tests
     #[test]
     fn test_undefined_variable_error() {
-        let mut lexer = Lexer::new("print(\"{}\", x + 5)");
+        let mut lexer = Lexer::new("shout(\"{}\", x + 5)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -517,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_division_by_zero() {
-        let mut lexer = Lexer::new("print(\"{}\", 5 / 0)");
+        let mut lexer = Lexer::new("shout(\"{}\", 5 / 0)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
@@ -532,21 +664,25 @@ mod tests {
     #[test]
     fn test_multiple_expressions() {
         let mut lexer =
-            Lexer::new("print(\"{}\", 5 + 3)\nprint(\"{}\", 2 * 4)\nprint(\"{}\", 10 - 1)");
+            Lexer::new("shout(\"{}\", 5 + 3)\nshout(\"{}\", 2 * 4)\nshout(\"{}\", 10 - 1)");
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
         let res = int.calculate(parsed_expr).unwrap();
 
-        assert_eq!(res, vec!["8".to_string(), "8".to_string(), "9".to_string()]);
+        assert_eq!(
+            res,
+            vec!["8\n".to_string(), "8\n".to_string(), "9\n".to_string()]
+        );
         // Results of each print expression
     }
 
     #[test]
     fn test_mixed_statements() {
-        let mut lexer =
-            Lexer::new("let x = 10\nprint(\"{}\", 20 + 5)\nlet y = x * 2\nprint(\"{}\", y)");
+        let mut lexer = Lexer::new(
+            "suppose x = 10\nwhisper(\"{}\", 20 + 5)\nsuppose y = x * 2\nwhisper(\"{}\", y)",
+        );
         let tokens = lexer.tokenize().unwrap();
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();

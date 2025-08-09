@@ -26,6 +26,8 @@ suppose pi = 3.14159
 ```
 whisper("Hello ")
 shout("World!")
+whisper("The answer is {}", 42)
+shout("Result: {}", x + y)
 ```
 
 ### Conditional Logic (with uncertainty)
@@ -49,12 +51,29 @@ suppose result = (10 + 5) * 2 - 3
 shout("Result: {}", result)
 ```
 
+### Arrays (Collections of Possibilities)
+```
+suppose numbers = [1, 2, 3, 4, 5]
+suppose names = ["alice", "bob", "charlie"]
+suppose mixed = [true, false, true]
+shout("First number: {}", numbers[0])
+```
+
 ### Comparisons
 - `>` greater than
 - `<` less than  
 - `>=` greater than or equal
 - `<=` less than or equal
 - `==` equal
+
+### Boolean Values
+```
+suppose is_ready = true
+suppose is_done = false
+maybe is_ready == true {
+    shout("Let's go!")
+}
+```
 
 ## Example Programs
 

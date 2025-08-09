@@ -11,6 +11,7 @@ pub enum PrintType {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Number(f64),
+    String(String),
     Add,
     Subtract,
     Multiply,
@@ -19,9 +20,10 @@ pub enum Token {
     RightParent,
     LeftBrace,
     RightBrace,
+    RightBracket,
+    LeftBracket,
     Suppose,
     Identifier(String),
-    String(String),
     Assign,
     Print(PrintType),
     GreaterThan,
@@ -33,6 +35,7 @@ pub enum Token {
     False,
     Maybe,
     Perhaps,
+    Wander,
     Nah,
     Equal,
     Pipeline,
@@ -93,6 +96,12 @@ impl Lexer {
                 }
                 '}' => {
                     self.handle_operator(Token::RightBrace)?;
+                }
+                '[' => {
+                    self.handle_operator(Token::LeftBracket)?;
+                }
+                ']' => {
+                    self.handle_operator(Token::RightBracket)?;
                 }
                 ',' => {
                     self.handle_operator(Token::Comma)?;
@@ -247,6 +256,7 @@ fn get_reserved_keywords() -> HashMap<String, Token> {
         ("maybe".to_string(), Token::Maybe),
         ("perhaps".to_string(), Token::Perhaps),
         ("nah".to_string(), Token::Nah),
+        ("wander".to_string(), Token::Wander),
     ])
 }
 
@@ -262,6 +272,22 @@ mod lexer_tests {
         assert_eq!(
             tokens,
             vec![Token::Number(2.0), Token::Add, Token::Number(3.0)]
+        );
+    }
+
+    #[test]
+    fn test_string_declaration() {
+        let mut lexer = Lexer::new("suppose s = \"yo\"");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Suppose,
+                Token::Identifier("s".to_string()),
+                Token::Assign,
+                Token::String("yo".to_string())
+            ]
         );
     }
 
@@ -626,6 +652,30 @@ mod lexer_tests {
         assert_eq!(
             tokens,
             vec![Token::Maybe, Token::Identifier("condition".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_array_declaration() {
+        let mut lexer = Lexer::new("suppose x = [1, 2, 3, 5]");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Suppose,
+                Token::Identifier("x".to_string()),
+                Token::Assign,
+                Token::LeftBracket,
+                Token::Number(1.0),
+                Token::Comma,
+                Token::Number(2.0),
+                Token::Comma,
+                Token::Number(3.0),
+                Token::Comma,
+                Token::Number(5.0),
+                Token::RightBracket
+            ]
         );
     }
 }

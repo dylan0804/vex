@@ -22,12 +22,17 @@ pub enum ParserError {
     ExpectedAssignmentAfterVariable,
     ExpectedIdentifierAfterLet,
 
+    // variable assignment errors
+    ExpectedAssignmentOperator(String),
+
     // expression errors
     ExpectedClosingParentAfterExpression,
 
     // format string errors
     InvalidClosingBrace,
     InvalidOpeningBrace,
+
+    ExpectedClosingBracket,
 }
 
 impl std::fmt::Display for ParserError {
@@ -41,12 +46,12 @@ impl std::fmt::Display for ParserError {
 
             // print statement errors
             ParserError::ExpectedOpeningParentAfterPrint => {
-                write!(f, "Expected an opening ( after print statement")
+                write!(f, "Expected an opening ( after shout statement")
             }
             ParserError::ExpectedClosingParentInPrint => {
-                write!(f, "Expected a closing ) in a print statement")
+                write!(f, "Expected a closing ) in a shout statement")
             }
-            ParserError::InvalidFormatString => write!(f, "Invalid format after print statement"),
+            ParserError::InvalidFormatString => write!(f, "Invalid format after shout statement"),
             ParserError::IncorrectArgumentCount { found, expected } => write!(
                 f,
                 "Incorrect arguments was passed. Found {}, expected {}",
@@ -55,10 +60,10 @@ impl std::fmt::Display for ParserError {
 
             // if statement errors
             ParserError::ExpectedOpeningBraceAfterIf => {
-                write!(f, "Expected '{{' after if condition")
+                write!(f, "Expected '{{' after maybe")
             }
             ParserError::ExpectedClosingBraceAfterIf => {
-                write!(f, "Expected a closing '}}' after if condition")
+                write!(f, "Expected a closing '}}' after maybe")
             }
 
             // variable declaration errors
@@ -66,7 +71,10 @@ impl std::fmt::Display for ParserError {
                 write!(f, "Expected '=' after variable name")
             }
             ParserError::ExpectedIdentifierAfterLet => {
-                write!(f, "Expected indentifier after 'let'")
+                write!(f, "Expected indentifier after 'suppose'")
+            }
+            ParserError::ExpectedAssignmentOperator(i) => {
+                write!(f, "Expected '=' after identifier '{}'", i)
             }
 
             // expression errors
@@ -77,6 +85,9 @@ impl std::fmt::Display for ParserError {
             // format string errors
             ParserError::InvalidClosingBrace => write!(f, "Invalid '}}' in format string"),
             ParserError::InvalidOpeningBrace => write!(f, "Invalid '{{' in format string"),
+
+            // array errors
+            ParserError::ExpectedClosingBracket => write!(f, "Expected ']' in array declaration"),
         }
     }
 }
