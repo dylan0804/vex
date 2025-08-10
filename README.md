@@ -123,10 +123,35 @@ The language encourages a more conversational, less rigid approach to coding - p
 
 ## Technical Details
 
-- **Scoping**: Block-scoped variables with proper shadowing
-- **Error Handling**: Friendly error messages (because debugging should be less painful)
-- **Architecture**: Lexer → Parser → Interpreter pipeline
+### Architecture
+Vex follows a classic interpreter architecture with three main phases:
+
+**1. Lexical Analysis (Tokenizer)**
+- `src/lexer.rs` - Converts source code into tokens
+- Handles keywords (`suppose`, `maybe`, `whisper`), operators (`+`, `==`), literals, and identifiers
+- Supports string parsing, number parsing (including decimals), and error reporting
+
+**2. Parsing (AST Generation)**
+- `src/parser.rs` - Builds an Abstract Syntax Tree from tokens
+- Uses recursive descent parsing with proper operator precedence
+- Generates AST nodes for expressions, statements, and control structures
+- AST types include:
+  - `Expr`: Variables, values, arrays, binary operations
+  - `Statement`: Declarations, assignments, print statements, if-else blocks
+  - `Value`: Numbers, strings, booleans, arrays
+
+**3. Interpretation (Tree Walking)**
+- `src/interpreter.rs` - Executes the AST directly
+- Implements variable scoping with a stack of hash maps
+- Handles type checking and runtime error reporting
+- Supports dynamic typing with runtime type coercion
+
+### Language Features
+- **Type System**: Dynamically typed with support for numbers (f64), strings, booleans, and arrays
+- **Scoping**: Block-scoped variables with proper shadowing support
+- **Error Handling**: Comprehensive error messages with context
+- **Memory Model**: Garbage-collected through Rust's ownership system
 
 ## Coming Soon
 
-We're working on arrays, loops, and functions. Because even uncertain languages need to iterate through possibilities.
+We're working on loops and functions. Because even uncertain languages need to iterate through possibilities and organize their thoughts.
