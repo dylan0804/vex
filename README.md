@@ -123,7 +123,6 @@ The language encourages a more conversational, less rigid approach to coding - p
 
 ## Technical Details
 
-- **Type System**: Dynamically typed with support for numbers (f64) and strings
 - **Scoping**: Block-scoped variables with proper shadowing
 - **Error Handling**: Friendly error messages (because debugging should be less painful)
 - **Architecture**: Lexer → Parser → Interpreter pipeline
