@@ -58,7 +58,7 @@ impl Value {
             Value::Number(n) => Ok(*n),
             Value::Boolean(b) => Err(anyhow!("Expected number, got boolean: {}", b)),
             Value::String(s) => Err(anyhow!("Expected number, got string: {}", s)),
-            Value::Array(s) => Err(anyhow!("Expected number, got arrays: {:?}", s)),
+            Value::Array(s) => Err(anyhow!("Expected number, got array: {:?}", s)),
         }
     }
 
@@ -80,6 +80,10 @@ pub enum Expr {
     Variable(String),
     Value(Value),
     Array(Vec<Expr>),
+    Index {
+        array: Box<Expr>,
+        index: Box<Expr>,
+    },
     BinaryOp {
         left: Box<Expr>,
         op: Token,
@@ -347,17 +351,38 @@ impl Parser {
     }
 
     fn parse_term(&mut self) -> Result<Expr, ParserError> {
-        let mut left = self.parse_factor()?;
+        let mut left = self.parse_postfix()?;
         while matches!(self.current_token(), Token::Multiply | Token::Divide) {
             let current_token = self.current_token();
             self.advance();
-            let right = self.parse_factor()?;
+            let right = self.parse_postfix()?;
             left = Expr::BinaryOp {
                 left: Box::new(left),
                 op: current_token,
                 right: Box::new(right),
             };
         }
+        Ok(left)
+    }
+
+    fn parse_postfix(&mut self) -> Result<Expr, ParserError> {
+        let mut left = self.parse_factor()?;
+        while matches!(self.current_token(), Token::LeftBracket) {
+            self.advance();
+            let index = self.parse_expression()?;
+
+            if !matches!(self.current_token(), Token::RightBracket) {
+                return Err(ParserError::ExpectedClosingBracket);
+            }
+
+            self.advance();
+
+            left = Expr::Index {
+                array: Box::new(left),
+                index: Box::new(index),
+            }
+        }
+
         Ok(left)
     }
 
@@ -1098,6 +1123,131 @@ mod parser_tests {
                 else_ifs: vec![],
                 else_block: None
             }]
+        );
+    }
+
+    #[test]
+    fn test_simple_array_indexing() {
+        let mut lexer = Lexer::new("arr[0]");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::Index {
+                array: Box::new(Expr::Variable("arr".to_string())),
+                index: Box::new(Expr::Value(Value::Number(0.0)))
+            }
+        );
+    }
+
+    #[test]
+    fn test_array_indexing_with_expression() {
+        let mut lexer = Lexer::new("numbers[i + 1]");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::Index {
+                array: Box::new(Expr::Variable("numbers".to_string())),
+                index: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("i".to_string())),
+                    op: Token::Add,
+                    right: Box::new(Expr::Value(Value::Number(1.0)))
+                })
+            }
+        );
+    }
+
+    #[test]
+    fn test_chained_array_indexing() {
+        let mut lexer = Lexer::new("matrix[0][1]");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::Index {
+                array: Box::new(Expr::Index {
+                    array: Box::new(Expr::Variable("matrix".to_string())),
+                    index: Box::new(Expr::Value(Value::Number(0.0)))
+                }),
+                index: Box::new(Expr::Value(Value::Number(1.0)))
+            }
+        );
+    }
+
+    #[test]
+    fn test_array_indexing_in_statement() {
+        let mut lexer = Lexer::new("whisper(\"Value: {}\", arr[2])");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::Print {
+                format_str: "Value: {}".to_string(),
+                args: vec![Expr::Index {
+                    array: Box::new(Expr::Variable("arr".to_string())),
+                    index: Box::new(Expr::Value(Value::Number(2.0)))
+                }]
+            }]
+        );
+    }
+
+    #[test]
+    fn test_array_indexing_with_operator_precedence() {
+        let mut lexer = Lexer::new("arr[0] + 5");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::BinaryOp {
+                left: Box::new(Expr::Index {
+                    array: Box::new(Expr::Variable("arr".to_string())),
+                    index: Box::new(Expr::Value(Value::Number(0.0)))
+                }),
+                op: Token::Add,
+                right: Box::new(Expr::Value(Value::Number(5.0)))
+            }
+        );
+    }
+
+    #[test]
+    fn test_complex_array_indexing_expression() {
+        let mut lexer = Lexer::new("data[i * 2][j + 1] * factor");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::BinaryOp {
+                left: Box::new(Expr::Index {
+                    array: Box::new(Expr::Index {
+                        array: Box::new(Expr::Variable("data".to_string())),
+                        index: Box::new(Expr::BinaryOp {
+                            left: Box::new(Expr::Variable("i".to_string())),
+                            op: Token::Multiply,
+                            right: Box::new(Expr::Value(Value::Number(2.0)))
+                        })
+                    }),
+                    index: Box::new(Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("j".to_string())),
+                        op: Token::Add,
+                        right: Box::new(Expr::Value(Value::Number(1.0)))
+                    })
+                }),
+                op: Token::Multiply,
+                right: Box::new(Expr::Variable("factor".to_string()))
+            }
         );
     }
 }

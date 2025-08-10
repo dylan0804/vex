@@ -152,6 +152,28 @@ impl Interpreter {
 
                 Ok(Value::Array(res))
             }
+            Expr::Index { array, index } => {
+                let arr_val = self.evaluate(&array)?;
+                let index_val = self.evaluate(&index)?;
+
+                match arr_val {
+                    Value::Array(a) => {
+                        let index = index_val.as_number()? as usize;
+                        a.get(index).cloned().ok_or_else(|| {
+                            anyhow!(
+                                "Index {} out of bounds for array of length {}",
+                                index,
+                                a.len()
+                            )
+                        })
+                    }
+                    _ => Err(anyhow!(
+                        "Cannot index {:?} of type {:?}, expected an array",
+                        arr_val,
+                        arr_val.get_type()
+                    )),
+                }
+            }
             Expr::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate(left)?;
                 let right_val = self.evaluate(right)?;
@@ -690,5 +712,125 @@ mod tests {
         let res = int.calculate(parsed_expr).unwrap();
 
         assert_eq!(res, vec!["25".to_string(), "20".to_string()]); // results from print statements only
+    }
+
+    // array indexing tests
+    #[test]
+    fn test_simple_array_indexing() {
+        let mut lexer = Lexer::new("suppose arr = [10, 20, 30]\nwhisper(\"{}\", arr[1])");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.calculate(parsed_expr).unwrap();
+
+        assert_eq!(res, vec!["20".to_string()]);
+    }
+
+    #[test]
+    fn test_array_indexing_with_variable() {
+        let mut lexer = Lexer::new(
+            "suppose numbers = [1, 2, 3, 4, 5]\nsuppose index = 3\nshout(\"{}\", numbers[index])",
+        );
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.calculate(parsed_expr).unwrap();
+
+        assert_eq!(res, vec!["4\n".to_string()]);
+    }
+
+    #[test]
+    fn test_array_indexing_with_expression() {
+        let mut lexer = Lexer::new("suppose data = [100, 200, 300]\nwhisper(\"{}\", data[1 + 1])");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.calculate(parsed_expr).unwrap();
+
+        assert_eq!(res, vec!["300".to_string()]);
+    }
+
+    #[test]
+    fn test_array_indexing_out_of_bounds() {
+        let mut lexer = Lexer::new("suppose arr = [1, 2]\nshout(\"{}\", arr[5])");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.calculate(parsed_expr);
+
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("Index 5 out of bounds"));
+    }
+
+    #[test]
+    fn test_array_indexing_with_non_integer() {
+        let mut lexer = Lexer::new("suppose arr = [1, 2, 3]\nwhisper(\"{}\", arr[1.5])");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.calculate(parsed_expr).unwrap();
+
+        // Should truncate to integer index 1
+        assert_eq!(res, vec!["2".to_string()]);
+    }
+
+    #[test]
+    fn test_indexing_non_array() {
+        let mut lexer = Lexer::new("suppose x = 42\nshout(\"{}\", x[0])");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.calculate(parsed_expr);
+
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("Cannot index"));
+    }
+
+    #[test]
+    fn test_array_indexing_in_expression() {
+        let mut lexer =
+            Lexer::new("suppose values = [10, 20, 30]\nshout(\"{}\", values[0] + values[2])");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.calculate(parsed_expr).unwrap();
+
+        assert_eq!(res, vec!["40\n".to_string()]); // 10 + 30 = 40
+    }
+
+    #[test]
+    fn test_string_array_indexing() {
+        let mut lexer = Lexer::new(
+            "suppose names = [\"alice\", \"bob\", \"charlie\"]\nwhisper(\"{}\", names[1])",
+        );
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.calculate(parsed_expr).unwrap();
+
+        assert_eq!(res, vec!["bob".to_string()]);
+    }
+
+    #[test]
+    fn test_boolean_array_indexing() {
+        let mut lexer = Lexer::new("suppose flags = [true, false, true]\nshout(\"{}\", flags[2])");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.calculate(parsed_expr).unwrap();
+
+        assert_eq!(res, vec!["true\n".to_string()]);
     }
 }

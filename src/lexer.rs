@@ -678,4 +678,78 @@ mod lexer_tests {
             ]
         );
     }
+
+    #[test]
+    fn test_array_indexing() {
+        let mut lexer = Lexer::new("arr[0]");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("arr".to_string()),
+                Token::LeftBracket,
+                Token::Number(0.0),
+                Token::RightBracket
+            ]
+        );
+    }
+
+    #[test]
+    fn test_array_indexing_with_expression() {
+        let mut lexer = Lexer::new("numbers[i + 1]");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("numbers".to_string()),
+                Token::LeftBracket,
+                Token::Identifier("i".to_string()),
+                Token::Add,
+                Token::Number(1.0),
+                Token::RightBracket
+            ]
+        );
+    }
+
+    #[test]
+    fn test_chained_array_indexing() {
+        let mut lexer = Lexer::new("matrix[0][1]");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("matrix".to_string()),
+                Token::LeftBracket,
+                Token::Number(0.0),
+                Token::RightBracket,
+                Token::LeftBracket,
+                Token::Number(1.0),
+                Token::RightBracket
+            ]
+        );
+    }
+
+    #[test]
+    fn test_array_indexing_in_print() {
+        let mut lexer = Lexer::new("whisper(\"Value: {}\", arr[2])");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Print(PrintType::Whisper),
+                Token::LeftParent,
+                Token::String("Value: {}".to_string()),
+                Token::Comma,
+                Token::Identifier("arr".to_string()),
+                Token::LeftBracket,
+                Token::Number(2.0),
+                Token::RightBracket,
+                Token::RightParent
+            ]
+        );
+    }
 }
