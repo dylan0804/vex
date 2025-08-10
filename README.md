@@ -2,13 +2,10 @@
 
 A delightfully unconventional programming language that speaks in whispers and shouts, where variables are just suppositions and conditions are maybe true.
 
-## Getting Started
+## Demo
 
-Build and run your Vex programs:
-```bash
-cargo build
-cargo run
-```
+Try it here!
+https://www.dylanch.pro/vex/playground
 
 ## Language Features
 
