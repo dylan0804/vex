@@ -36,6 +36,8 @@ pub enum Token {
     Maybe,
     Perhaps,
     Wander,
+    Contemplate,
+    SupposeIts,
     Nah,
     Equal,
     Pipeline,
@@ -257,6 +259,8 @@ fn get_reserved_keywords() -> HashMap<String, Token> {
         ("perhaps".to_string(), Token::Perhaps),
         ("nah".to_string(), Token::Nah),
         ("wander".to_string(), Token::Wander),
+        ("contemplate".to_string(), Token::Contemplate),
+        ("suppose_its".to_string(), Token::SupposeIts),
     ])
 }
 
@@ -748,6 +752,124 @@ mod lexer_tests {
                 Token::LeftBracket,
                 Token::Number(2.0),
                 Token::RightBracket,
+                Token::RightParent
+            ]
+        );
+    }
+
+    #[test]
+    fn test_function_declaration() {
+        let mut lexer = Lexer::new("contemplate add(a, b) { suppose_its a + b }");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Contemplate,
+                Token::Identifier("add".to_string()),
+                Token::LeftParent,
+                Token::Identifier("a".to_string()),
+                Token::Comma,
+                Token::Identifier("b".to_string()),
+                Token::RightParent,
+                Token::LeftBrace,
+                Token::SupposeIts,
+                Token::Identifier("a".to_string()),
+                Token::Add,
+                Token::Identifier("b".to_string()),
+                Token::RightBrace
+            ]
+        );
+    }
+
+    #[test]
+    fn test_function_call() {
+        let mut lexer = Lexer::new("add(5, 3)");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("add".to_string()),
+                Token::LeftParent,
+                Token::Number(5.0),
+                Token::Comma,
+                Token::Number(3.0),
+                Token::RightParent
+            ]
+        );
+    }
+
+    #[test]
+    fn test_function_with_no_params() {
+        let mut lexer = Lexer::new("contemplate greet() { shout(\"Hello!\") }");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Contemplate,
+                Token::Identifier("greet".to_string()),
+                Token::LeftParent,
+                Token::RightParent,
+                Token::LeftBrace,
+                Token::Print(PrintType::Shout),
+                Token::LeftParent,
+                Token::String("Hello!".to_string()),
+                Token::RightParent,
+                Token::RightBrace
+            ]
+        );
+    }
+
+    #[test]
+    fn test_function_call_in_expression() {
+        let mut lexer = Lexer::new("whisper(\"{}\", add(x, y) * 2)");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Print(PrintType::Whisper),
+                Token::LeftParent,
+                Token::String("{}".to_string()),
+                Token::Comma,
+                Token::Identifier("add".to_string()),
+                Token::LeftParent,
+                Token::Identifier("x".to_string()),
+                Token::Comma,
+                Token::Identifier("y".to_string()),
+                Token::RightParent,
+                Token::Multiply,
+                Token::Number(2.0),
+                Token::RightParent
+            ]
+        );
+    }
+
+    #[test]
+    fn test_nested_function_calls() {
+        let mut lexer = Lexer::new("max(add(1, 2), multiply(3, 4))");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("max".to_string()),
+                Token::LeftParent,
+                Token::Identifier("add".to_string()),
+                Token::LeftParent,
+                Token::Number(1.0),
+                Token::Comma,
+                Token::Number(2.0),
+                Token::RightParent,
+                Token::Comma,
+                Token::Identifier("multiply".to_string()),
+                Token::LeftParent,
+                Token::Number(3.0),
+                Token::Comma,
+                Token::Number(4.0),
+                Token::RightParent,
                 Token::RightParent
             ]
         );

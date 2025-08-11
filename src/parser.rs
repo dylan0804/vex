@@ -5,7 +5,7 @@ use crate::{
     lexer::{PrintType, Token},
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Declaration {
         name: String,
@@ -24,6 +24,14 @@ pub enum Statement {
         then_block: Vec<Statement>,
         else_ifs: Vec<(Expr, Vec<Statement>)>,
         else_block: Option<Vec<Statement>>,
+    },
+    FunctionDeclaration {
+        fn_name: String,
+        parameters: Vec<String>,
+        body: Vec<Statement>,
+    },
+    Return {
+        expr: Expr,
     },
 }
 
@@ -84,6 +92,10 @@ pub enum Expr {
         array: Box<Expr>,
         index: Box<Expr>,
     },
+    FunctionCall {
+        name: String,
+        args: Vec<Expr>,
+    },
     BinaryOp {
         left: Box<Expr>,
         op: Token,
@@ -127,6 +139,7 @@ impl Parser {
 
     pub fn parse_statement(&mut self) -> Result<Vec<Statement>, ParserError> {
         let mut statements = Vec::new();
+        println!("tokens {:?}", self.tokens);
         while self.current < self.tokens.len() {
             let current_token = self.current_token();
             match current_token {
@@ -148,7 +161,47 @@ impl Parser {
 
                     statements.push(Statement::Assignment { name: i, expr });
                 }
+                Token::Contemplate => {
+                    self.advance();
+
+                    // get function name
+                    let fn_name = if let Token::Identifier(fn_name) = self.current_token() {
+                        Ok(fn_name)
+                    } else {
+                        Err(ParserError::ExpectedFunctionName)
+                    }?;
+                    self.advance();
+
+                    if !matches!(self.current_token(), Token::LeftParent) {
+                        return Err(ParserError::ExpectedOpeningParenthesesAfterFunction);
+                    }
+                    self.advance();
+
+                    // get parameters
+                    let parameters = self.collect_params()?;
+
+                    // consume right parentheses
+                    if !matches!(self.current_token(), Token::RightParent) {
+                        return Err(ParserError::ExpectedClosingParenthesesAfterFunction);
+                    }
+                    self.advance();
+
+                    // consume bracket
+                    self.advance();
+
+                    // get function body
+                    let body = self.parse_statement()?;
+
+                    // consume right brace
+                    self.advance();
+                    statements.push(Statement::FunctionDeclaration {
+                        fn_name,
+                        parameters,
+                        body,
+                    });
+                }
                 Token::Print(pt) => {
+                    println!("here");
                     self.advance();
                     if !matches!(self.current_token(), Token::LeftParent) {
                         return Err(ParserError::ExpectedOpeningParentAfterPrint);
@@ -164,6 +217,11 @@ impl Parser {
 
                     self.advance();
                     statements.push(print_stmt);
+                }
+                Token::SupposeIts => {
+                    self.advance();
+                    let expr = self.parse_comparison()?;
+                    statements.push(Statement::Return { expr });
                 }
                 // if statements
                 Token::Maybe => {
@@ -205,6 +263,38 @@ impl Parser {
         }
 
         Ok(statements)
+    }
+
+    fn collect_params(&mut self) -> Result<Vec<String>, ParserError> {
+        let mut parameters = Vec::new();
+
+        // handle empty params
+        if matches!(self.current_token(), Token::RightParent) {
+            return Ok(parameters);
+        }
+
+        loop {
+            if let Token::Identifier(param) = self.current_token() {
+                parameters.push(param);
+                self.advance();
+            } else {
+                return Err(ParserError::ExpectedParameterName);
+            }
+
+            match self.current_token() {
+                Token::Comma => {
+                    self.advance(); // consume comma
+                }
+                Token::RightParent => {
+                    break;
+                }
+                _ => {
+                    return Err(ParserError::ExpectedCommaOrClosingParen);
+                }
+            }
+        }
+
+        Ok(parameters)
     }
 
     fn parse_block_with_braces(&mut self) -> Result<Vec<Statement>, ParserError> {
@@ -312,6 +402,28 @@ impl Parser {
         }
     }
 
+    fn parse_function_args(&mut self) -> Result<Vec<Expr>, ParserError> {
+        let mut args = Vec::new();
+
+        if matches!(self.current_token(), Token::RightParent) {
+            return Ok(args);
+        }
+
+        loop {
+            args.push(self.parse_comparison()?);
+
+            match self.current_token() {
+                Token::Comma => {
+                    self.advance();
+                }
+                Token::RightParent => break,
+                _ => return Err(ParserError::ExpectedCommaOrClosingParen),
+            }
+        }
+
+        Ok(args)
+    }
+
     fn parse_comparison(&mut self) -> Result<Expr, ParserError> {
         let mut left = self.parse_expression()?;
         while matches!(
@@ -367,19 +479,43 @@ impl Parser {
 
     fn parse_postfix(&mut self) -> Result<Expr, ParserError> {
         let mut left = self.parse_factor()?;
-        while matches!(self.current_token(), Token::LeftBracket) {
-            self.advance();
-            let index = self.parse_expression()?;
+        while matches!(self.current_token(), Token::LeftBracket | Token::LeftParent) {
+            match self.current_token() {
+                // array related
+                Token::LeftBracket => {
+                    self.advance();
+                    let index = self.parse_expression()?;
 
-            if !matches!(self.current_token(), Token::RightBracket) {
-                return Err(ParserError::ExpectedClosingBracket);
-            }
+                    if !matches!(self.current_token(), Token::RightBracket) {
+                        return Err(ParserError::ExpectedClosingBracket);
+                    }
 
-            self.advance();
+                    self.advance();
 
-            left = Expr::Index {
-                array: Box::new(left),
-                index: Box::new(index),
+                    left = Expr::Index {
+                        array: Box::new(left),
+                        index: Box::new(index),
+                    }
+                }
+                // function call
+                Token::LeftParent => {
+                    self.advance();
+                    let args = self.parse_function_args()?;
+
+                    if !matches!(self.current_token(), Token::RightParent) {
+                        return Err(ParserError::ExpectedClosingParenthesesAfterFunction);
+                    }
+                    self.advance();
+
+                    let name = if let Expr::Variable(i) = left {
+                        Ok(i)
+                    } else {
+                        Err(ParserError::InvalidFunctionName)
+                    }?;
+
+                    left = Expr::FunctionCall { name, args }
+                }
+                _ => break,
             }
         }
 
@@ -390,23 +526,23 @@ impl Parser {
         match self.current_token() {
             Token::Number(n) => {
                 self.advance();
-                return Ok(Expr::Value(Value::Number(n)));
+                Ok(Expr::Value(Value::Number(n)))
             }
             Token::Identifier(i) => {
                 self.advance();
-                return Ok(Expr::Variable(i));
+                Ok(Expr::Variable(i))
             }
             Token::String(s) => {
                 self.advance();
-                return Ok(Expr::Value(Value::String(s)));
+                Ok(Expr::Value(Value::String(s)))
             }
             Token::True => {
                 self.advance();
-                return Ok(Expr::Value(Value::Boolean(true)));
+                Ok(Expr::Value(Value::Boolean(true)))
             }
             Token::False => {
                 self.advance();
-                return Ok(Expr::Value(Value::Boolean(false)));
+                Ok(Expr::Value(Value::Boolean(false)))
             }
             Token::LeftParent => {
                 self.advance();
@@ -414,9 +550,9 @@ impl Parser {
 
                 if matches!(self.current_token(), Token::RightParent) {
                     self.advance();
-                    return Ok(expr);
+                    Ok(expr)
                 } else {
-                    return Err(ParserError::ExpectedClosingParentAfterExpression);
+                    Err(ParserError::ExpectedClosingParentAfterExpression)
                 }
             }
             _ => Err(ParserError::UnexpectedToken(self.current_token())),
@@ -426,7 +562,7 @@ impl Parser {
     pub fn is_statement_token(&self) -> bool {
         matches!(
             self.current_token(),
-            Token::Suppose | Token::Maybe | Token::Print(_)
+            Token::Suppose | Token::Maybe | Token::Print(_) | Token::SupposeIts
         )
     }
 }
@@ -1248,6 +1384,209 @@ mod parser_tests {
                 op: Token::Multiply,
                 right: Box::new(Expr::Variable("factor".to_string()))
             }
+        );
+    }
+
+    #[test]
+    fn test_simple_function_declaration() {
+        let mut lexer = Lexer::new("contemplate add(a, b) { suppose_its a + b }");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::FunctionDeclaration {
+                fn_name: "add".to_string(),
+                parameters: vec!["a".to_string(), "b".to_string()],
+                body: vec![Statement::Return {
+                    expr: Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("a".to_string())),
+                        op: Token::Add,
+                        right: Box::new(Expr::Variable("b".to_string()))
+                    }
+                }]
+            }]
+        );
+    }
+
+    #[test]
+    fn test_function_with_no_parameters() {
+        let mut lexer = Lexer::new("contemplate greet() { shout(\"Hello!\") }");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::FunctionDeclaration {
+                fn_name: "greet".to_string(),
+                parameters: vec![],
+                body: vec![Statement::Print {
+                    format_str: "Hello!\n".to_string(),
+                    args: vec![]
+                }]
+            }]
+        );
+    }
+
+    #[test]
+    fn test_function_with_single_parameter() {
+        let mut lexer = Lexer::new("contemplate square(x) { suppose_its x * x }");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::FunctionDeclaration {
+                fn_name: "square".to_string(),
+                parameters: vec!["x".to_string()],
+                body: vec![Statement::Return {
+                    expr: Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("x".to_string())),
+                        op: Token::Multiply,
+                        right: Box::new(Expr::Variable("x".to_string()))
+                    }
+                }]
+            }]
+        );
+    }
+
+    #[test]
+    fn test_function_with_multiple_statements() {
+        let mut lexer = Lexer::new("contemplate calculate(x, y) { suppose result = x + y\nshout(\"Result: {}\", result)\nsuppose_its result }");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::FunctionDeclaration {
+                fn_name: "calculate".to_string(),
+                parameters: vec!["x".to_string(), "y".to_string()],
+                body: vec![
+                    Statement::Declaration {
+                        name: "result".to_string(),
+                        expr: Expr::BinaryOp {
+                            left: Box::new(Expr::Variable("x".to_string())),
+                            op: Token::Add,
+                            right: Box::new(Expr::Variable("y".to_string()))
+                        }
+                    },
+                    Statement::Print {
+                        format_str: "Result: {}\n".to_string(),
+                        args: vec![Expr::Variable("result".to_string())]
+                    },
+                    Statement::Return {
+                        expr: Expr::Variable("result".to_string())
+                    }
+                ]
+            }]
+        );
+    }
+
+    #[test]
+    fn test_function_with_conditional_return() {
+        let mut lexer = Lexer::new(
+            "contemplate max(a, b) { maybe a > b { suppose_its a } nah { suppose_its b } }",
+        );
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::FunctionDeclaration {
+                fn_name: "max".to_string(),
+                parameters: vec!["a".to_string(), "b".to_string()],
+                body: vec![Statement::If {
+                    condition: Expr::BinaryOp {
+                        left: Box::new(Expr::Variable("a".to_string())),
+                        op: Token::GreaterThan,
+                        right: Box::new(Expr::Variable("b".to_string()))
+                    },
+                    then_block: vec![Statement::Return {
+                        expr: Expr::Variable("a".to_string())
+                    }],
+                    else_ifs: vec![],
+                    else_block: Some(vec![Statement::Return {
+                        expr: Expr::Variable("b".to_string())
+                    }])
+                }]
+            }]
+        );
+    }
+
+    #[test]
+    fn test_function_call_expression() {
+        let mut lexer = Lexer::new("add(5, 3)");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::FunctionCall {
+                name: "add".to_string(),
+                args: vec![
+                    Expr::Value(Value::Number(5.0)),
+                    Expr::Value(Value::Number(3.0))
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_nested_function_calls() {
+        let mut lexer = Lexer::new("max(add(1, 2), multiply(3, 4))");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::FunctionCall {
+                name: "max".to_string(),
+                args: vec![
+                    Expr::FunctionCall {
+                        name: "add".to_string(),
+                        args: vec![
+                            Expr::Value(Value::Number(1.0)),
+                            Expr::Value(Value::Number(2.0))
+                        ]
+                    },
+                    Expr::FunctionCall {
+                        name: "multiply".to_string(),
+                        args: vec![
+                            Expr::Value(Value::Number(3.0)),
+                            Expr::Value(Value::Number(4.0))
+                        ]
+                    }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_function_call_in_statement() {
+        let mut lexer = Lexer::new("suppose result = add(x, y)");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::Declaration {
+                name: "result".to_string(),
+                expr: Expr::FunctionCall {
+                    name: "add".to_string(),
+                    args: vec![
+                        Expr::Variable("x".to_string()),
+                        Expr::Variable("y".to_string())
+                    ]
+                }
+            }]
         );
     }
 }

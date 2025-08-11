@@ -33,6 +33,13 @@ pub enum ParserError {
     InvalidOpeningBrace,
 
     ExpectedClosingBracket,
+
+    ExpectedOpeningParenthesesAfterFunction,
+    ExpectedClosingParenthesesAfterFunction,
+    ExpectedFunctionName,
+    ExpectedParameterName,
+    ExpectedCommaOrClosingParen,
+    InvalidFunctionName,
 }
 
 impl std::fmt::Display for ParserError {
@@ -88,6 +95,25 @@ impl std::fmt::Display for ParserError {
 
             // array errors
             ParserError::ExpectedClosingBracket => write!(f, "Expected ']' in array declaration"),
+
+            ParserError::ExpectedOpeningParenthesesAfterFunction => {
+                write!(f, "Expected '(' after function declaration")
+            }
+            ParserError::ExpectedClosingParenthesesAfterFunction => {
+                write!(f, "Expected ')' after function declaration")
+            }
+            ParserError::ExpectedFunctionName => {
+                write!(f, "Expected function name")
+            }
+            ParserError::ExpectedParameterName => {
+                write!(f, "Expected parameter name (identifier)")
+            }
+            ParserError::ExpectedCommaOrClosingParen => {
+                write!(f, "Expected ',' or ')' in parameter list")
+            }
+            ParserError::InvalidFunctionName => {
+                write!(f, "Invalid function name")
+            }
         }
     }
 }

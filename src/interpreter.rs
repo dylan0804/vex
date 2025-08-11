@@ -9,13 +9,27 @@ use crate::{
 
 pub struct Interpreter {
     scopes: Vec<HashMap<String, Value>>,
+    functions: HashMap<String, FunctionDef>,
+    output: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct FunctionDef {
+    parameters: Vec<String>,
+    body: Vec<Statement>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            functions: HashMap::new(),
+            output: Vec::new(),
         }
+    }
+
+    pub fn get_output(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.output)
     }
 
     pub fn push_scope(&mut self) {
@@ -64,8 +78,8 @@ impl Interpreter {
         result
     }
 
-    pub fn calculate(&mut self, statements: Vec<Statement>) -> Result<Vec<String>> {
-        let mut results = Vec::new();
+    pub fn execute(&mut self, statements: Vec<Statement>) -> Result<Option<Expr>> {
+        let mut return_stmt = None;
         for stmt in statements {
             match stmt {
                 Statement::Declaration { name, expr } => {
@@ -82,7 +96,19 @@ impl Interpreter {
                         let value = self.evaluate(&arg)?.to_string();
                         formatted_str = formatted_str.replacen("{}", &value, 1);
                     }
-                    results.push(formatted_str);
+                    self.output.push(formatted_str);
+                }
+                Statement::FunctionDeclaration {
+                    fn_name,
+                    parameters,
+                    body,
+                } => {
+                    if let Some(_) = self.functions.get(&fn_name) {
+                        return Err(anyhow!("Function '{}' already exists", fn_name));
+                    } else {
+                        self.functions
+                            .insert(fn_name, FunctionDef { parameters, body });
+                    }
                 }
                 Statement::If {
                     condition,
@@ -90,13 +116,29 @@ impl Interpreter {
                     else_ifs,
                     else_block,
                 } => {
-                    let result =
+                    return_stmt =
                         self.execute_if_statement(condition, then_block, else_ifs, else_block)?;
-                    results.extend(result);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(return_stmt)
+    }
+
+    fn execute_block_with_returns(&mut self, statements: Vec<Statement>) -> Result<Option<Expr>> {
+        for stmt in statements {
+            match stmt {
+                Statement::Return { expr } => return Ok(Some(expr)),
+                _ => {
+                    if let Some(return_expr) = self.execute(vec![stmt])? {
+                        return Ok(Some(return_expr));
+                    }
                 }
             }
         }
-        Ok(results)
+
+        Ok(None)
     }
 
     fn execute_if_statement(
@@ -105,22 +147,26 @@ impl Interpreter {
         then_block: Vec<Statement>,
         else_ifs: Vec<(Expr, Vec<Statement>)>,
         else_block: Option<Vec<Statement>>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Option<Expr>> {
         if let Value::Boolean(true) = self.evaluate(&condition)? {
-            return self.with_scope(|interpreter| interpreter.calculate(then_block));
+            return self
+                .with_scope(|interpreter| interpreter.execute_block_with_returns(then_block));
         }
 
-        for (else_if_expr, else_if_stmt) in else_ifs {
+        for (else_if_expr, else_if_stmts) in else_ifs {
             if let Value::Boolean(true) = self.evaluate(&else_if_expr)? {
-                return self.with_scope(|interpreter| interpreter.calculate(else_if_stmt));
+                return self.with_scope(|interpreter| {
+                    interpreter.execute_block_with_returns(else_if_stmts)
+                });
             }
         }
 
         if let Some(else_block) = else_block {
-            return self.with_scope(|interpreter| interpreter.calculate(else_block));
+            return self
+                .with_scope(|interpreter| interpreter.execute_block_with_returns(else_block));
         }
 
-        Ok(Vec::new())
+        Ok(None)
     }
 
     pub fn evaluate(&mut self, expr: &Expr) -> Result<Value> {
@@ -151,6 +197,55 @@ impl Interpreter {
                 }
 
                 Ok(Value::Array(res))
+            }
+            Expr::FunctionCall { name, args } => {
+                let function_def = if let Some(t) = self.functions.get(name).cloned() {
+                    Ok(t)
+                } else {
+                    Err(anyhow!("Function '{}' not found", name))
+                }?;
+
+                if args.len() != function_def.parameters.len() {
+                    return Err(anyhow!(
+                        "Function '{}' expects {} arguments, got {}",
+                        name,
+                        function_def.parameters.len(),
+                        args.len()
+                    ));
+                }
+
+                let mut param_bindings = HashMap::new();
+                for (param_name, arg_expr) in function_def.parameters.iter().zip(args.iter()) {
+                    let arg_value = self.evaluate(&arg_expr)?;
+                    param_bindings.insert(param_name.clone(), arg_value);
+                }
+
+                self.with_scope(|interpreter| {
+                    for (name, value) in param_bindings {
+                        interpreter.set_variable(name, value);
+                    }
+
+                    // default value, dont
+                    // matter but change to more
+                    // apt enum later on
+                    let mut result = Value::Number(0.0);
+                    for stmt in function_def.body {
+                        match stmt {
+                            Statement::Return { expr } => {
+                                result = interpreter.evaluate(&expr)?;
+                                break;
+                            }
+                            _ => {
+                                if let Some(return_expr) = interpreter.execute(vec![stmt])? {
+                                    result = interpreter.evaluate(&return_expr)?;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    Ok(result)
+                })
             }
             Expr::Index { array, index } => {
                 let arr_val = self.evaluate(&array)?;
@@ -323,7 +418,8 @@ mod interpreter_tests {
         let mut parser = Parser::new(tokens);
         let statements = parser.parse_statement().unwrap();
         let mut interpreter = Interpreter::new();
-        interpreter.calculate(statements)
+        interpreter.execute(statements)?;
+        Ok(interpreter.get_output())
     }
 
     #[test]
@@ -465,7 +561,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["5".to_string()]);
     }
@@ -477,7 +574,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["11".to_string()]); // 3 + (2 * 4) = 11
     }
@@ -489,7 +587,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["6".to_string()]);
     }
@@ -501,7 +600,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["20\n".to_string()]);
     }
@@ -513,7 +613,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["5".to_string()]);
     }
@@ -525,7 +626,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["20".to_string()]); // (3 + 2) * 4 = 20
     }
@@ -537,7 +639,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["13\n".to_string()]); // 2 + (3 * 4) - 1 = 13
     }
@@ -549,7 +652,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["5\n".to_string()]); // (10 - 3) - 2 = 5
     }
@@ -561,7 +665,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["10".to_string()]); // ((2 + 3) * 4) / 2 = 10
     }
@@ -573,7 +678,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["5.75".to_string()]);
     }
@@ -585,7 +691,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["42\n".to_string()]);
     }
@@ -598,7 +705,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["8".to_string()]); // x(5) + 3 = 8
     }
@@ -610,7 +718,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["50".to_string()]); // x(10) * y(5) = 50
     }
@@ -622,7 +731,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["15\n".to_string()]); // y = x(5) + 10 = 15
     }
@@ -634,7 +744,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["10\n".to_string()]); // x gets redeclared to 10
     }
@@ -647,7 +758,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["14\n".to_string()]); // a(2) + b(3) * c(4) = 2 + 12 = 14
     }
@@ -660,7 +772,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr);
+        let res = int.execute(parsed_expr);
 
         assert!(res.is_err());
         assert!(res
@@ -676,7 +788,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr);
+        let res = int.execute(parsed_expr);
 
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "Division by zero");
@@ -691,7 +803,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(
             res,
@@ -709,7 +822,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["25".to_string(), "20".to_string()]); // results from print statements only
     }
@@ -722,7 +836,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["20".to_string()]);
     }
@@ -736,7 +851,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["4\n".to_string()]);
     }
@@ -748,7 +864,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["300".to_string()]);
     }
@@ -760,7 +877,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr);
+        let res = int.execute(parsed_expr);
 
         assert!(res.is_err());
         assert!(res
@@ -776,7 +893,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         // Should truncate to integer index 1
         assert_eq!(res, vec!["2".to_string()]);
@@ -789,7 +907,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr);
+        let res = int.execute(parsed_expr);
 
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("Cannot index"));
@@ -803,7 +921,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["40\n".to_string()]); // 10 + 30 = 40
     }
@@ -817,7 +936,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["bob".to_string()]);
     }
@@ -829,8 +949,186 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let parsed_expr = parser.parse_statement().unwrap();
         let mut int = Interpreter::new();
-        let res = int.calculate(parsed_expr).unwrap();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
 
         assert_eq!(res, vec!["true\n".to_string()]);
+    }
+
+    // function tests
+    #[test]
+    fn test_function_declaration() {
+        let mut lexer = Lexer::new("contemplate add(a, b) { suppose_its a + b }");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
+
+        // Function declaration should not produce output
+        assert_eq!(res, Vec::<String>::new());
+
+        // But function should be stored
+        assert!(int.functions.contains_key("add"));
+    }
+
+    #[test]
+    fn test_simple_function_call() {
+        let mut lexer = Lexer::new("contemplate add(a, b) { suppose_its a + b }\nsuppose result = add(5, 3)\nshout(\"{}\", result)");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
+
+        assert_eq!(res, vec!["8\n".to_string()]);
+    }
+
+    #[test]
+    fn test_function_with_no_parameters() {
+        let mut lexer =
+            Lexer::new("contemplate greet() { suppose_its \"Hello!\" }\nshout(\"{}\", greet())");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
+
+        assert_eq!(res, vec!["Hello!\n".to_string()]);
+    }
+
+    #[test]
+    fn test_function_with_variables() {
+        let mut lexer = Lexer::new("contemplate square(x) { suppose_its x * x }\nsuppose num = 4\nwhisper(\"{}\", square(num))");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
+
+        assert_eq!(res, vec!["16".to_string()]);
+    }
+
+    #[test]
+    fn test_function_with_multiple_statements() {
+        let mut lexer = Lexer::new("contemplate execute(x, y) { suppose temp = x * 2\nsuppose_its temp + y }\nshout(\"{}\", execute(3, 4))");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
+
+        assert_eq!(res, vec!["10\n".to_string()]); // (3 * 2) + 4 = 10
+    }
+
+    #[test]
+    fn test_function_scoping() {
+        let mut lexer = Lexer::new("suppose x = 100\ncontemplate test(x) { suppose_its x + 1 }\nshout(\"Global: {}\", x)\nshout(\"Function: {}\", test(5))");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
+
+        assert_eq!(
+            res,
+            vec!["Global: 100\n".to_string(), "Function: 6\n".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_nested_function_calls() {
+        let mut lexer = Lexer::new("contemplate add(a, b) { suppose_its a + b }\ncontemplate multiply(x, y) { suppose_its x * y }\nwhisper(\"{}\", add(multiply(2, 3), 4))");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
+
+        assert_eq!(res, vec!["10".to_string()]); // (2 * 3) + 4 = 10
+    }
+
+    #[test]
+    fn test_function_with_conditional_return() {
+        let mut lexer = Lexer::new("contemplate max(a, b) { maybe a > b { suppose_its a } nah { suppose_its b } }\nshout(\"{}\", max(10, 7))");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
+
+        assert_eq!(res, vec!["10\n".to_string()]);
+    }
+
+    #[test]
+    fn test_function_not_found_error() {
+        let mut lexer = Lexer::new("suppose result = unknown_function(5)");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.execute(parsed_expr);
+
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("Function 'unknown_function' not found"));
+    }
+
+    #[test]
+    fn test_function_wrong_argument_count() {
+        let mut lexer =
+            Lexer::new("contemplate add(a, b) { suppose_its a + b }\nsuppose result = add(5)");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.execute(parsed_expr);
+
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("expects 2 arguments, got 1"));
+    }
+
+    #[test]
+    fn test_function_redeclaration_error() {
+        let mut lexer = Lexer::new(
+            "contemplate test() { suppose_its 1 }\ncontemplate test() { suppose_its 2 }",
+        );
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        let res = int.execute(parsed_expr);
+
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("Function 'test' already exists"));
+    }
+
+    #[test]
+    fn test_recursive_function() {
+        let mut lexer = Lexer::new("contemplate factorial(n) { maybe n <= 1 { suppose_its 1 } nah { suppose_its n * factorial(n - 1) } }\nshout(\"{}\", factorial(5))");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_statement().unwrap();
+        let mut int = Interpreter::new();
+        int.execute(parsed_expr).unwrap();
+        let res = int.get_output();
+
+        assert_eq!(res, vec!["120\n".to_string()]); // 5! = 120
     }
 }

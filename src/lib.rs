@@ -19,9 +19,11 @@ pub fn run(code: &str) -> Result<String, JsValue> {
         .map_err(|e| JsValue::from(&e.to_string()))?;
 
     let mut interpreter = Interpreter::new();
-    let result = interpreter
-        .calculate(statements)
+    interpreter
+        .execute(statements)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-    serde_json::to_string(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    let output = interpreter.get_output();
+
+    serde_json::to_string(&output).map_err(|e| JsValue::from_str(&e.to_string()))
 }
