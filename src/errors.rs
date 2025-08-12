@@ -40,6 +40,7 @@ pub enum ParserError {
     ExpectedParameterName,
     ExpectedCommaOrClosingParen,
     InvalidFunctionName,
+    ExpectedAssignmentOrFunctionCall,
 }
 
 impl std::fmt::Display for ParserError {
@@ -113,6 +114,9 @@ impl std::fmt::Display for ParserError {
             }
             ParserError::InvalidFunctionName => {
                 write!(f, "Invalid function name")
+            }
+            ParserError::ExpectedAssignmentOrFunctionCall => {
+                write!(f, "Expected '(' or '=' after identifier")
             }
         }
     }

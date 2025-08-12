@@ -110,6 +110,9 @@ impl Interpreter {
                             .insert(fn_name, FunctionDef { parameters, body });
                     }
                 }
+                Statement::FunctionCall(expr) => {
+                    self.evaluate(&expr)?;
+                }
                 Statement::If {
                     condition,
                     then_block,
@@ -225,10 +228,7 @@ impl Interpreter {
                         interpreter.set_variable(name, value);
                     }
 
-                    // default value, dont
-                    // matter but change to more
-                    // apt enum later on
-                    let mut result = Value::Number(0.0);
+                    let mut result = Value::None;
                     for stmt in function_def.body {
                         match stmt {
                             Statement::Return { expr } => {

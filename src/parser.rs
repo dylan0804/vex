@@ -30,6 +30,7 @@ pub enum Statement {
         parameters: Vec<String>,
         body: Vec<Statement>,
     },
+    FunctionCall(Expr),
     Return {
         expr: Expr,
     },
@@ -41,6 +42,7 @@ pub enum ValueType {
     String,
     Boolean,
     Array,
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +51,7 @@ pub enum Value {
     Boolean(bool),
     String(String),
     Array(Vec<Value>),
+    None,
 }
 
 impl Value {
@@ -58,6 +61,7 @@ impl Value {
             Value::Boolean(_) => ValueType::Boolean,
             Value::String(_) => ValueType::String,
             Value::Array(_) => ValueType::Array,
+            Value::None => ValueType::None,
         }
     }
 
@@ -67,6 +71,7 @@ impl Value {
             Value::Boolean(b) => Err(anyhow!("Expected number, got boolean: {}", b)),
             Value::String(s) => Err(anyhow!("Expected number, got string: {}", s)),
             Value::Array(s) => Err(anyhow!("Expected number, got array: {:?}", s)),
+            Value::None => Err(anyhow!("Expected number, got none")),
         }
     }
 
@@ -75,6 +80,7 @@ impl Value {
             Value::Number(n) => n.to_string(),
             Value::Boolean(b) => b.to_string(),
             Value::String(s) => s.to_string(),
+            Value::None => "".to_string(),
             Value::Array(arr) => {
                 let elements = arr.iter().map(|e| e.to_string()).collect::<Vec<String>>();
                 format!("[{}]", elements.join(", "))
@@ -139,7 +145,6 @@ impl Parser {
 
     pub fn parse_statement(&mut self) -> Result<Vec<Statement>, ParserError> {
         let mut statements = Vec::new();
-        println!("tokens {:?}", self.tokens);
         while self.current < self.tokens.len() {
             let current_token = self.current_token();
             match current_token {
@@ -150,16 +155,24 @@ impl Parser {
                     statements.push(stmt);
                 }
                 Token::Identifier(i) => {
-                    self.advance();
-                    // check if next token is assign, if yes than its an assignment statement
-                    let expr = if matches!(self.current_token(), Token::Assign) {
-                        self.advance();
-                        self.parse_comparison()
-                    } else {
-                        Err(ParserError::ExpectedAssignmentOperator(i.to_string()))
-                    }?;
+                    match self.tokens[self.current + 1] {
+                        Token::Assign => {
+                            self.advance(); // consume identifier
+                            self.advance(); // consume assign
 
-                    statements.push(Statement::Assignment { name: i, expr });
+                            let expr = self.parse_comparison()?;
+
+                            statements.push(Statement::Assignment {
+                                name: i.clone(),
+                                expr,
+                            });
+                        }
+                        Token::LeftParent => {
+                            let expr = self.parse_comparison()?;
+                            statements.push(Statement::FunctionCall(expr));
+                        }
+                        _ => return Err(ParserError::ExpectedAssignmentOrFunctionCall),
+                    }
                 }
                 Token::Contemplate => {
                     self.advance();
@@ -201,7 +214,6 @@ impl Parser {
                     });
                 }
                 Token::Print(pt) => {
-                    println!("here");
                     self.advance();
                     if !matches!(self.current_token(), Token::LeftParent) {
                         return Err(ParserError::ExpectedOpeningParentAfterPrint);
