@@ -491,7 +491,10 @@ impl Parser {
 
     fn parse_postfix(&mut self) -> Result<Expr, ParserError> {
         let mut left = self.parse_factor()?;
-        while matches!(self.current_token(), Token::LeftBracket | Token::LeftParent) {
+        while matches!(
+            self.current_token(),
+            Token::LeftBracket | Token::LeftParent | Token::Pipeline
+        ) {
             match self.current_token() {
                 // array related
                 Token::LeftBracket => {
@@ -520,10 +523,36 @@ impl Parser {
                     self.advance();
 
                     let name = if let Expr::Variable(i) = left {
+                        Ok(i.to_string())
+                    } else {
+                        Err(ParserError::InvalidFunctionName)
+                    }?;
+
+                    left = Expr::FunctionCall { name, args }
+                }
+                // pipeline operation
+                Token::Pipeline => {
+                    self.advance();
+
+                    let name = if let Token::Identifier(i) = self.current_token() {
                         Ok(i)
                     } else {
                         Err(ParserError::InvalidFunctionName)
                     }?;
+                    self.advance();
+
+                    if !matches!(self.current_token(), Token::LeftParent) {
+                        return Err(ParserError::ExpectedOpeningParenthesesAfterFunction);
+                    }
+                    self.advance();
+
+                    let mut args = self.parse_function_args()?;
+                    args.insert(0, left); // attach piped value
+
+                    if !matches!(self.current_token(), Token::RightParent) {
+                        return Err(ParserError::ExpectedClosingParenthesesAfterFunction);
+                    }
+                    self.advance();
 
                     left = Expr::FunctionCall { name, args }
                 }
@@ -1599,6 +1628,107 @@ mod parser_tests {
                     ]
                 }
             }]
+        );
+    }
+
+    #[test]
+    fn test_pipe_operator_expression() {
+        let mut lexer = Lexer::new("5 |> add(3)");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::FunctionCall {
+                name: "add".to_string(),
+                args: vec![
+                    Expr::Value(Value::Number(5.0)),
+                    Expr::Value(Value::Number(3.0))
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_pipe_operator_in_variable_declaration() {
+        let mut lexer = Lexer::new("suppose result = 10 |> add(5)");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_stmt = parser.parse_statement().unwrap();
+
+        assert_eq!(
+            parsed_stmt,
+            vec![Statement::Declaration {
+                name: "result".to_string(),
+                expr: Expr::FunctionCall {
+                    name: "add".to_string(),
+                    args: vec![
+                        Expr::Value(Value::Number(10.0)),
+                        Expr::Value(Value::Number(5.0))
+                    ]
+                }
+            }]
+        );
+    }
+
+    #[test]
+    fn test_chained_pipeline_operations() {
+        let mut lexer = Lexer::new("10 |> add(5) |> multiply(2) |> subtract(3)");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::FunctionCall {
+                name: "subtract".to_string(),
+                args: vec![
+                    Expr::FunctionCall {
+                        name: "multiply".to_string(),
+                        args: vec![
+                            Expr::FunctionCall {
+                                name: "add".to_string(),
+                                args: vec![
+                                    Expr::Value(Value::Number(10.0)),
+                                    Expr::Value(Value::Number(5.0))
+                                ]
+                            },
+                            Expr::Value(Value::Number(2.0))
+                        ]
+                    },
+                    Expr::Value(Value::Number(3.0))
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_pipeline_with_variables_and_complex_expressions() {
+        let mut lexer = Lexer::new("x |> add(y * 2) |> max(100)");
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let parsed_expr = parser.parse_expression().unwrap();
+
+        assert_eq!(
+            parsed_expr,
+            Expr::FunctionCall {
+                name: "max".to_string(),
+                args: vec![
+                    Expr::FunctionCall {
+                        name: "add".to_string(),
+                        args: vec![
+                            Expr::Variable("x".to_string()),
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::Variable("y".to_string())),
+                                op: Token::Multiply,
+                                right: Box::new(Expr::Value(Value::Number(2.0)))
+                            }
+                        ]
+                    },
+                    Expr::Value(Value::Number(100.0))
+                ]
+            }
         );
     }
 }
