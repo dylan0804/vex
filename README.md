@@ -95,21 +95,43 @@ maybe hour < 12 {
 }
 ```
 
-### Nested Conditions
+### Working with Functions
 ```
-suppose score = 85
-
-maybe score >= 90 {
-    maybe score >= 95 {
-        shout("Outstanding!")
+contemplate fibonacci(n) {
+    maybe n <= 1 {
+        suppose_its n
     } nah {
-        shout("Excellent!")
+        suppose_its fibonacci(n - 1) + fibonacci(n - 2)
     }
-} perhaps score >= 70 {
-    shout("Good job!")
-} nah {
-    shout("Keep trying!")
 }
+
+contemplate factorial(n) {
+    maybe n <= 1 {
+        suppose_its 1
+    } nah {
+        suppose_its n * factorial(n - 1)
+    }
+}
+
+shout("Fibonacci of 10: {}", fibonacci(10))
+shout("Factorial of 5: {}", factorial(5))
+```
+
+### Pipeline Magic
+```
+contemplate double(x) { suppose_its x * 2 }
+contemplate add_ten(x) { suppose_its x + 10 }
+contemplate format_result(x) { suppose_its "Result: " + x }
+
+// Traditional nested approach (harder to read):
+suppose traditional = format_result(add_ten(double(5)))
+
+// Pipeline approach (reads like English):
+suppose pipeline = 5 |> double() |> add_ten() |> format_result()
+
+// Both give the same result!
+shout("{}", traditional)  // Result: 20
+shout("{}", pipeline)     // Result: 20
 ```
 
 ## Philosophy
@@ -149,6 +171,3 @@ Vex follows a classic interpreter architecture with three main phases:
 - **Error Handling**: Comprehensive error messages with context
 - **Memory Model**: Garbage-collected through Rust's ownership system
 
-## Coming Soon
-
-We're working on loops and functions. Because even uncertain languages need to iterate through possibilities and organize their thoughts.

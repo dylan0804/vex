@@ -108,14 +108,14 @@ impl Lexer {
                 ',' => {
                     self.handle_operator(Token::Comma)?;
                 }
-                '|' => {
-                    if let Some(c) = self.peek(&input) {
-                        if c == '>' {
-                            self.advance_position();
-                            self.handle_operator(Token::Pipeline)?;
-                        }
+                '|' => match self.peek(&input) {
+                    Some('>') => {
+                        self.advance_position();
+                        self.handle_operator(Token::Pipeline)?;
                     }
-                }
+                    // add more | operators later on
+                    _ => return Err(anyhow!("Invalid use of '|'")),
+                },
                 '<' => self.check_ahead(&input, '=', Token::LessThanOrEqual, Token::LessThan)?,
                 '>' => {
                     self.check_ahead(&input, '=', Token::GreaterThanOrEqual, Token::GreaterThan)?
@@ -870,6 +870,70 @@ mod lexer_tests {
                 Token::Comma,
                 Token::Number(4.0),
                 Token::RightParent,
+                Token::RightParent
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pipe_operator() {
+        let mut lexer = Lexer::new("5 |> add(3)");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Number(5.0),
+                Token::Pipeline,
+                Token::Identifier("add".to_string()),
+                Token::LeftParent,
+                Token::Number(3.0),
+                Token::RightParent
+            ]
+        );
+    }
+
+    #[test]
+    fn test_chained_pipe_operations() {
+        let mut lexer = Lexer::new("10 |> add(5) |> multiply(2) |> whisper(\"{}\")");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Number(10.0),
+                Token::Pipeline,
+                Token::Identifier("add".to_string()),
+                Token::LeftParent,
+                Token::Number(5.0),
+                Token::RightParent,
+                Token::Pipeline,
+                Token::Identifier("multiply".to_string()),
+                Token::LeftParent,
+                Token::Number(2.0),
+                Token::RightParent,
+                Token::Pipeline,
+                Token::Print(PrintType::Whisper),
+                Token::LeftParent,
+                Token::String("{}".to_string()),
+                Token::RightParent
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pipe_with_variable() {
+        let mut lexer = Lexer::new("x |> max(10)");
+        let tokens = lexer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("x".to_string()),
+                Token::Pipeline,
+                Token::Identifier("max".to_string()),
+                Token::LeftParent,
+                Token::Number(10.0),
                 Token::RightParent
             ]
         );
