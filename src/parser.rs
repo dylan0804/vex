@@ -31,9 +31,7 @@ pub enum Statement {
         body: Vec<Statement>,
     },
     FunctionCall(Expr),
-    Return {
-        expr: Expr,
-    },
+    Return(Expr),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -233,7 +231,7 @@ impl Parser {
                 Token::SupposeIts => {
                     self.advance();
                     let expr = self.parse_comparison()?;
-                    statements.push(Statement::Return { expr });
+                    statements.push(Statement::Return(expr));
                 }
                 // if statements
                 Token::Maybe => {
@@ -1440,13 +1438,11 @@ mod parser_tests {
             vec![Statement::FunctionDeclaration {
                 fn_name: "add".to_string(),
                 parameters: vec!["a".to_string(), "b".to_string()],
-                body: vec![Statement::Return {
-                    expr: Expr::BinaryOp {
-                        left: Box::new(Expr::Variable("a".to_string())),
-                        op: Token::Add,
-                        right: Box::new(Expr::Variable("b".to_string()))
-                    }
-                }]
+                body: vec![Statement::Return(Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("a".to_string())),
+                    op: Token::Add,
+                    right: Box::new(Expr::Variable("b".to_string()))
+                })]
             }]
         );
     }
@@ -1483,13 +1479,11 @@ mod parser_tests {
             vec![Statement::FunctionDeclaration {
                 fn_name: "square".to_string(),
                 parameters: vec!["x".to_string()],
-                body: vec![Statement::Return {
-                    expr: Expr::BinaryOp {
-                        left: Box::new(Expr::Variable("x".to_string())),
-                        op: Token::Multiply,
-                        right: Box::new(Expr::Variable("x".to_string()))
-                    }
-                }]
+                body: vec![Statement::Return(Expr::BinaryOp {
+                    left: Box::new(Expr::Variable("x".to_string())),
+                    op: Token::Multiply,
+                    right: Box::new(Expr::Variable("x".to_string()))
+                })]
             }]
         );
     }
@@ -1519,9 +1513,7 @@ mod parser_tests {
                         format_str: "Result: {}\n".to_string(),
                         args: vec![Expr::Variable("result".to_string())]
                     },
-                    Statement::Return {
-                        expr: Expr::Variable("result".to_string())
-                    }
+                    Statement::Return(Expr::Variable("result".to_string()))
                 ]
             }]
         );
@@ -1547,13 +1539,9 @@ mod parser_tests {
                         op: Token::GreaterThan,
                         right: Box::new(Expr::Variable("b".to_string()))
                     },
-                    then_block: vec![Statement::Return {
-                        expr: Expr::Variable("a".to_string())
-                    }],
+                    then_block: vec![Statement::Return(Expr::Variable("a".to_string()))],
                     else_ifs: vec![],
-                    else_block: Some(vec![Statement::Return {
-                        expr: Expr::Variable("b".to_string())
-                    }])
+                    else_block: Some(vec![Statement::Return(Expr::Variable("b".to_string()))])
                 }]
             }]
         );

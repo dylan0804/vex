@@ -132,7 +132,7 @@ impl Interpreter {
     fn execute_block_with_returns(&mut self, statements: Vec<Statement>) -> Result<Option<Expr>> {
         for stmt in statements {
             match stmt {
-                Statement::Return { expr } => return Ok(Some(expr)),
+                Statement::Return(expr) => return Ok(Some(expr)),
                 _ => {
                     if let Some(return_expr) = self.execute(vec![stmt])? {
                         return Ok(Some(return_expr));
@@ -231,7 +231,7 @@ impl Interpreter {
                     let mut result = Value::None;
                     for stmt in function_def.body {
                         match stmt {
-                            Statement::Return { expr } => {
+                            Statement::Return(expr) => {
                                 result = interpreter.evaluate(&expr)?;
                                 break;
                             }
