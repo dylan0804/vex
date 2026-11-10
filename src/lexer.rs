@@ -41,6 +41,7 @@ pub enum Token {
     Nah,
     Equal,
     Pipeline,
+    In,
     Eof, // add more operators later
 }
 
@@ -235,11 +236,11 @@ impl Lexer {
 
     fn peek(&self, input: &str) -> Option<char> {
         let mut next = 1;
+        let bytes = input.as_bytes();
         while self.position + next < input.len() {
-            if let Some(c) = input.chars().nth(self.position + next) {
-                if !c.is_whitespace() {
-                    return Some(c);
-                }
+            let c = bytes[self.position + next] as char;
+            if !c.is_whitespace() {
+                return Some(c);
             }
             next += 1;
         }
@@ -261,6 +262,8 @@ fn get_reserved_keywords() -> HashMap<String, Token> {
         ("wander".to_string(), Token::Wander),
         ("contemplate".to_string(), Token::Contemplate),
         ("suppose_its".to_string(), Token::SupposeIts),
+        ("wander".to_string(), Token::Wander),
+        ("in".to_string(), Token::In),
     ])
 }
 

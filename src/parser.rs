@@ -30,8 +30,12 @@ pub enum Statement {
         parameters: Vec<String>,
         body: Vec<Statement>,
     },
+    Loop {
+        condition: Expr,
+        body: Vec<Statement>,
+    },
     FunctionCall(Expr),
-    Return(Expr),
+    Return(Option<Expr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -230,8 +234,17 @@ impl Parser {
                 }
                 Token::SupposeIts => {
                     self.advance();
-                    let expr = self.parse_comparison()?;
-                    statements.push(Statement::Return(expr));
+
+                    // if next token is a statement that means its a void return bcs suppose_its
+                    // has to be followed with an expr
+                    if self.is_statement_token()
+                        || matches!(self.current_token(), Token::RightBrace)
+                    {
+                        statements.push(Statement::Return(None));
+                    } else {
+                        let expr = self.parse_comparison()?;
+                        statements.push(Statement::Return(Some(expr)));
+                    }
                 }
                 // if statements
                 Token::Maybe => {
@@ -267,6 +280,15 @@ impl Parser {
                     };
 
                     statements.push(if_statement);
+                }
+                Token::Wander => {
+                    self.advance();
+
+                    let condition = self.parse_comparison()?;
+                    let body = self.parse_block_with_braces()?;
+
+                    let loop_statement = Statement::Loop { condition, body };
+                    statements.push(loop_statement);
                 }
                 _ => break,
             }
@@ -1438,11 +1460,11 @@ mod parser_tests {
             vec![Statement::FunctionDeclaration {
                 fn_name: "add".to_string(),
                 parameters: vec!["a".to_string(), "b".to_string()],
-                body: vec![Statement::Return(Expr::BinaryOp {
+                body: vec![Statement::Return(Some(Expr::BinaryOp {
                     left: Box::new(Expr::Variable("a".to_string())),
                     op: Token::Add,
                     right: Box::new(Expr::Variable("b".to_string()))
-                })]
+                }))]
             }]
         );
     }
@@ -1479,11 +1501,11 @@ mod parser_tests {
             vec![Statement::FunctionDeclaration {
                 fn_name: "square".to_string(),
                 parameters: vec!["x".to_string()],
-                body: vec![Statement::Return(Expr::BinaryOp {
+                body: vec![Statement::Return(Some(Expr::BinaryOp {
                     left: Box::new(Expr::Variable("x".to_string())),
                     op: Token::Multiply,
                     right: Box::new(Expr::Variable("x".to_string()))
-                })]
+                }))]
             }]
         );
     }
@@ -1513,7 +1535,7 @@ mod parser_tests {
                         format_str: "Result: {}\n".to_string(),
                         args: vec![Expr::Variable("result".to_string())]
                     },
-                    Statement::Return(Expr::Variable("result".to_string()))
+                    Statement::Return(Some(Expr::Variable("result".to_string())))
                 ]
             }]
         );
@@ -1539,9 +1561,11 @@ mod parser_tests {
                         op: Token::GreaterThan,
                         right: Box::new(Expr::Variable("b".to_string()))
                     },
-                    then_block: vec![Statement::Return(Expr::Variable("a".to_string()))],
+                    then_block: vec![Statement::Return(Some(Expr::Variable("a".to_string())))],
                     else_ifs: vec![],
-                    else_block: Some(vec![Statement::Return(Expr::Variable("b".to_string()))])
+                    else_block: Some(vec![Statement::Return(Some(Expr::Variable(
+                        "b".to_string()
+                    )))])
                 }]
             }]
         );

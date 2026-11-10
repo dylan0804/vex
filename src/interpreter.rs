@@ -122,6 +122,14 @@ impl Interpreter {
                     return_stmt =
                         self.execute_if_statement(condition, then_block, else_ifs, else_block)?;
                 }
+                Statement::Loop { condition, body } => {
+                    while let Value::Boolean(true) = self.evaluate(&condition)? {
+                        self.with_scope(|interpreter| {
+                            let a = interpreter.execute_block_with_returns(body.clone())?;
+                            return Ok(a);
+                        });
+                    }
+                }
                 _ => {}
             }
         }
@@ -132,11 +140,28 @@ impl Interpreter {
     fn execute_block_with_returns(&mut self, statements: Vec<Statement>) -> Result<Option<Expr>> {
         for stmt in statements {
             match stmt {
-                Statement::Return(expr) => return Ok(Some(expr)),
-                _ => {
-                    if let Some(return_expr) = self.execute(vec![stmt])? {
+                Statement::Return(expr) => return Ok(expr),
+                Statement::If {
+                    condition,
+                    then_block,
+                    else_ifs,
+                    else_block,
+                } => {
+                    if let Some(return_expr) =
+                        self.execute_if_statement(condition, then_block, else_ifs, else_block)?
+                    {
                         return Ok(Some(return_expr));
                     }
+                }
+                Statement::Loop { condition, body } => {
+                    while let Value::Boolean(true) = self.evaluate(&condition)? {
+                        if let Some(return_expr) = self.execute_block_with_returns(body.clone())? {
+                            return Ok(Some(return_expr));
+                        }
+                    }
+                }
+                _ => {
+                    self.execute(vec![stmt])?;
                 }
             }
         }
@@ -231,7 +256,7 @@ impl Interpreter {
                     let mut result = Value::None;
                     for stmt in function_def.body {
                         match stmt {
-                            Statement::Return(expr) => {
+                            Statement::Return(Some(expr)) => {
                                 result = interpreter.evaluate(&expr)?;
                                 break;
                             }
