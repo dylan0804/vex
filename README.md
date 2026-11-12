@@ -5,7 +5,7 @@ A delightfully unconventional programming language that speaks in whispers and s
 ## Demo
 
 Try it here!
-https://www.dylanch.pro/vex/playground
+https://it-compiles.dev
 
 ## Language Features
 
